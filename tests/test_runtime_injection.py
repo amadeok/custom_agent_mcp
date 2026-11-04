@@ -96,7 +96,7 @@ def _runtime(tmp_path, **overrides) -> tuple[PyFindRuntime, FakeGate, FakeInject
     return runtime, gate, inject
 
 
-def test_each_input_call_blocks_only_for_its_own_injection(tmp_path):
+def test_every_injection_blocks_keyboard_and_mouse(tmp_path):
     runtime, gate, _ = _runtime(tmp_path)
 
     runtime.click(10, 10)
@@ -106,18 +106,18 @@ def test_each_input_call_blocks_only_for_its_own_injection(tmp_path):
     runtime.close()
 
     assert gate.calls == [
-        ("begin_injection", False, True),
-        ("end_injection", False, True, False),
-        ("begin_injection", True, False),
-        ("end_injection", True, False, False),
-        ("begin_injection", True, False),
-        ("end_injection", True, False, False),
-        ("begin_injection", False, True),
-        ("end_injection", False, True, False),
+        ("begin_injection", True, True),
+        ("end_injection", True, True, False),
+        ("begin_injection", True, True),
+        ("end_injection", True, True, False),
+        ("begin_injection", True, True),
+        ("end_injection", True, True, False),
+        ("begin_injection", True, True),
+        ("end_injection", True, True, False),
     ]
 
 
-def test_click_modifiers_block_the_keyboard_too(tmp_path):
+def test_click_modifiers_are_held_while_both_devices_are_blocked(tmp_path):
     runtime, gate, _ = _runtime(tmp_path)
 
     runtime.click(10, 10, modifiers=["ctrl"])
@@ -129,15 +129,15 @@ def test_click_modifiers_block_the_keyboard_too(tmp_path):
     ]
 
 
-def test_drag_blocks_for_the_whole_drag(tmp_path):
+def test_drag_blocks_both_devices_for_the_whole_drag(tmp_path):
     runtime, gate, _ = _runtime(tmp_path)
 
     runtime.drag(10, 10, 20, 20, duration=0)
     runtime.close()
 
     assert gate.calls == [
-        ("begin_injection", False, True),
-        ("end_injection", False, True, False),
+        ("begin_injection", True, True),
+        ("end_injection", True, True, False),
     ]
 
 
@@ -150,8 +150,8 @@ def test_injection_releases_the_gate_when_inject_raises(tmp_path):
 
     runtime.close()
     assert gate.calls == [
-        ("begin_injection", False, True),
-        ("end_injection", False, True, False),
+        ("begin_injection", True, True),
+        ("end_injection", True, True, False),
     ]
 
 
@@ -179,8 +179,8 @@ def test_task_and_injection_cues_fire_around_actions(tmp_path, monkeypatch):
     assert cues == ["start", "injection", "end"]
     assert gate.calls == [
         ("begin_task", None),
-        ("begin_injection", False, True),
-        ("end_injection", False, True, False),
+        ("begin_injection", True, True),
+        ("end_injection", True, True, False),
         ("end_task",),
     ]
 
@@ -199,15 +199,32 @@ def _fake_window(runtime, handle=42, title="Notepad"):
     runtime.find_window = lambda query: {"title": title, "handle": handle}
 
 
-def test_press_key_focuses_target_before_injecting(tmp_path, monkeypatch):
-    runtime, gate, inject = _runtime(tmp_path)
-    _fake_window(runtime)
-    monkeypatch.setattr(runtime_module.focus_support, "owns_foreground", lambda h: False)
+PREVIOUS = (7, "OpenCode")
+
+
+def _stub_focus(monkeypatch, gate, *, owns, ensure=None, restore=None, previous=PREVIOUS):
+    monkeypatch.setattr(runtime_module.focus_support, "owns_foreground", owns)
+    monkeypatch.setattr(
+        runtime_module.focus_support, "capture_foreground", lambda: previous
+    )
     monkeypatch.setattr(
         runtime_module.focus_support,
         "ensure_foreground",
-        lambda handle, *, title: gate.calls.append(("focus", handle, title)),
+        ensure
+        or (lambda handle, *, title: gate.calls.append(("focus", handle, title))),
     )
+    monkeypatch.setattr(
+        runtime_module.focus_support,
+        "restore_foreground",
+        restore
+        or (lambda handle, *, title: gate.calls.append(("restore", handle, title))),
+    )
+
+
+def test_press_key_focuses_target_then_restores_previous_focus(tmp_path, monkeypatch):
+    runtime, gate, inject = _runtime(tmp_path)
+    _fake_window(runtime)
+    _stub_focus(monkeypatch, gate, owns=lambda h: False)
 
     result = runtime.press_key("enter", window_title="Notepad")
     runtime.close()
@@ -215,12 +232,16 @@ def test_press_key_focuses_target_before_injecting(tmp_path, monkeypatch):
     assert result["window_title"] == "Notepad"
     assert result["window_handle"] == 42
     assert result["focus_recovered"] is True
+    assert result["focus_restored"] is True
+    assert result["previous_window_handle"] == 7
+    assert result["previous_window_title"] == "OpenCode"
     assert gate.calls == [
-        ("begin_injection", True, False),
+        ("begin_injection", True, True),
         ("focus", 42, "Notepad"),
-        ("begin_injection", True, False),
-        ("end_injection", True, False, False),
-        ("end_injection", True, False, False),
+        ("begin_injection", True, True),
+        ("restore", 7, "OpenCode"),
+        ("end_injection", True, True, False),
+        ("end_injection", True, True, False),
     ]
     assert inject.calls == [("tap", "enter", 0.02)]
 
@@ -228,20 +249,23 @@ def test_press_key_focuses_target_before_injecting(tmp_path, monkeypatch):
 def test_press_key_skips_focus_when_window_is_already_foreground(tmp_path, monkeypatch):
     runtime, gate, inject = _runtime(tmp_path)
     _fake_window(runtime)
-    monkeypatch.setattr(runtime_module.focus_support, "owns_foreground", lambda h: True)
-    monkeypatch.setattr(
-        runtime_module.focus_support,
-        "ensure_foreground",
-        lambda handle, *, title: pytest.fail("focus must not be forced"),
+    _stub_focus(
+        monkeypatch,
+        gate,
+        owns=lambda h: True,
+        ensure=lambda handle, *, title: pytest.fail("focus must not be forced"),
+        restore=lambda handle, *, title: pytest.fail("focus must not be restored"),
     )
 
     result = runtime.press_key("ctrl+s", window_title="Notepad")
     runtime.close()
 
     assert result["focus_recovered"] is False
+    assert result["focus_restored"] is False
+    assert result["previous_window_handle"] is None
     assert gate.calls == [
-        ("begin_injection", True, False),
-        ("end_injection", True, False, False),
+        ("begin_injection", True, True),
+        ("end_injection", True, True, False),
     ]
     assert inject.calls == [("combo", ("ctrl", "s"), 0.02)]
 
@@ -249,12 +273,18 @@ def test_press_key_skips_focus_when_window_is_already_foreground(tmp_path, monke
 def test_press_key_does_not_inject_when_focus_cannot_be_recovered(tmp_path, monkeypatch):
     runtime, gate, inject = _runtime(tmp_path)
     _fake_window(runtime)
-    monkeypatch.setattr(runtime_module.focus_support, "owns_foreground", lambda h: False)
 
     def fail(handle, *, title):
         raise FocusNotAcquiredError("could not focus")
 
-    monkeypatch.setattr(runtime_module.focus_support, "ensure_foreground", fail)
+    # The previous window still owns the foreground, so nothing is restored.
+    _stub_focus(
+        monkeypatch,
+        gate,
+        owns=lambda h: h == PREVIOUS[0],
+        ensure=fail,
+        restore=lambda handle, *, title: pytest.fail("focus must not be restored"),
+    )
 
     with pytest.raises(FocusNotAcquiredError, match="could not focus"):
         runtime.press_key("enter", window_title="Notepad")
@@ -263,30 +293,96 @@ def test_press_key_does_not_inject_when_focus_cannot_be_recovered(tmp_path, monk
     assert inject.calls == []
     # The focus hold is released even though the key was never sent.
     assert gate.calls == [
-        ("begin_injection", True, False),
-        ("end_injection", True, False, False),
+        ("begin_injection", True, True),
+        ("end_injection", True, True, False),
     ]
 
 
-def test_click_focuses_target_before_sending_mouse_event(tmp_path, monkeypatch):
+def test_failed_focus_acquisition_restores_the_previous_window(tmp_path, monkeypatch):
     runtime, gate, inject = _runtime(tmp_path)
     _fake_window(runtime)
-    monkeypatch.setattr(runtime_module.focus_support, "owns_foreground", lambda h: False)
-    monkeypatch.setattr(
-        runtime_module.focus_support,
-        "ensure_foreground",
-        lambda handle, *, title: gate.calls.append(("focus", handle, title)),
+    state = {"focused": PREVIOUS[0]}
+
+    def fail_after_moving(handle, *, title):
+        # Windows moved focus but verification timed out.
+        state["focused"] = handle
+        raise FocusNotAcquiredError("focus verification timed out")
+
+    def restore(handle, *, title):
+        gate.calls.append(("restore", handle, title))
+        state["focused"] = handle
+
+    _stub_focus(
+        monkeypatch,
+        gate,
+        owns=lambda h: h == state["focused"],
+        ensure=fail_after_moving,
+        restore=restore,
     )
 
-    runtime.click(10, 10, window_title="Notepad")
+    with pytest.raises(FocusNotAcquiredError, match="focus verification timed out"):
+        runtime.press_key("enter", window_title="Notepad")
     runtime.close()
 
+    assert inject.calls == []
     assert gate.calls == [
-        ("begin_injection", False, True),
+        ("begin_injection", True, True),
+        ("restore", 7, "OpenCode"),
+        ("end_injection", True, True, False),
+    ]
+
+
+def test_failed_focus_restore_raises_but_still_releases_the_gate(tmp_path, monkeypatch):
+    runtime, gate, inject = _runtime(tmp_path)
+    _fake_window(runtime)
+
+    def fail_restore(handle, *, title):
+        raise FocusNotAcquiredError("Focus was not restored to OpenCode")
+
+    _stub_focus(monkeypatch, gate, owns=lambda h: False, restore=fail_restore)
+
+    with pytest.raises(FocusNotAcquiredError, match="Focus was not restored"):
+        runtime.press_key("enter", window_title="Notepad")
+    runtime.close()
+
+    # The key was sent; only the restore failed, and the gate still opened.
+    assert inject.calls == [("tap", "enter", 0.02)]
+    assert gate.calls[-1] == ("end_injection", True, True, False)
+
+
+def test_injection_and_focus_restore_failures_are_both_reported(tmp_path, monkeypatch):
+    runtime, gate, inject = _runtime(tmp_path)
+    _fake_window(runtime)
+    inject.fail_on = "tap"
+
+    def fail_restore(handle, *, title):
+        raise FocusNotAcquiredError("Focus was not restored to OpenCode")
+
+    _stub_focus(monkeypatch, gate, owns=lambda h: False, restore=fail_restore)
+
+    with pytest.raises(PyFindRuntimeError, match="also failed"):
+        runtime.press_key("enter", window_title="Notepad")
+    runtime.close()
+
+    assert gate.calls[-1] == ("end_injection", True, True, False)
+
+
+def test_click_focuses_target_then_restores_previous_focus(tmp_path, monkeypatch):
+    runtime, gate, inject = _runtime(tmp_path)
+    _fake_window(runtime)
+    _stub_focus(monkeypatch, gate, owns=lambda h: False)
+
+    result = runtime.click(10, 10, window_title="Notepad")
+    runtime.close()
+
+    assert result["focus_restored"] is True
+    assert gate.calls == [
+        ("begin_injection", True, True),
         ("focus", 42, "Notepad"),
-        ("begin_injection", False, True),
-        ("end_injection", False, True, False),
-        ("end_injection", False, True, False),
+        ("begin_injection", True, True),
+        ("restore", 7, "OpenCode"),
+        ("end_injection", True, True, False),
+        ("end_injection", True, True, False),
     ]
     assert inject.calls == [("mouse_click_at", 10, 10, "left", 1, 0.0)]
 

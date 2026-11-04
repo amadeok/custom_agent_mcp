@@ -47,9 +47,10 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
 
         Events are injected with loge2's passthrough tag, so the click still
         reaches the desktop while block_user_input is active. modifiers are held
-        for the click, for example ["ctrl"] for a ctrl-click. Pass window_title
-        to bring that window to the front first; the click fails instead of
-        hitting a window that covers the target.
+        for the click, for example ["ctrl"] for a ctrl-click. Keyboard and mouse
+        are blocked for the injection. Pass window_title to bring that window to
+        the front first; the click fails instead of hitting a window that covers
+        the target, and the previously focused window gets focus back afterwards.
         """
         return runtime.click(
             x,
@@ -88,8 +89,9 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
         """Press a mouse button at one point, move to another, and release it.
 
         The button is released in a finally block, so a failed drag cannot leave
-        the desktop with a held mouse button. Pass window_title to bring that
-        window to the front first.
+        the desktop with a held mouse button. Keyboard and mouse are blocked for
+        the whole drag. Pass window_title to bring that window to the front
+        first; the previously focused window gets focus back afterwards.
         """
         return runtime.drag(
             from_x,
@@ -112,12 +114,14 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
         """Type arbitrary Unicode text into the focused window.
 
         Uses loge2's KEYEVENTF_UNICODE injection, so it is independent of the
-        active keyboard layout and still works while input is blocked. This
-        tool NEVER changes focus on its own: text goes to whatever window has
-        focus. Always pass the window_title you inspected, so the server can
-        confirm that window is still in front. If it is not, the server blocks
-        input and restores focus before typing; if focus cannot be restored the
-        call fails and no text is sent.
+        active keyboard layout and still works while input is blocked. Keyboard
+        and mouse are blocked for the injection. This tool only changes focus to
+        reach window_title and always gives the previously focused window its
+        focus back afterwards. Always pass the window_title you inspected: if
+        that window is not in front, the server blocks input and focuses it
+        before typing. If focus cannot be acquired, no text is sent; if focus
+        cannot be restored afterwards, the call fails. Both failures are
+        reported as errors instead of silently typing into the wrong window.
         """
         return runtime.type_text(
             text, interval=interval, window_title=window_title
@@ -133,11 +137,12 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
         """Press a key or hotkey, for example "enter", "tab", or "ctrl+shift+s".
 
         Named keys (enter, tab, ctrl...) go to the window with keyboard focus,
-        which may have changed while you were thinking. Always pass the
-        window_title you inspected: if that window lost focus, the server
-        blocks input and forces it back to the foreground before pressing. If
-        focus cannot be restored, the call fails and nothing is sent, so a lost
-        key is reported as an error instead of a silent failure.
+        which may have changed while you were thinking. Keyboard and mouse are
+        blocked for the injection. Always pass the window_title you inspected:
+        if that window lost focus, the server blocks input and forces it back
+        to the foreground before pressing, then restores the window that had
+        focus before. If either focus change fails, the call raises an error: a
+        lost key, or focus left on the wrong window, is never silent.
         """
         return runtime.press_key(key, hold=hold, window_title=window_title)
 
@@ -153,8 +158,9 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
         """Scroll the mouse wheel.
 
         Positive scrolls up (right when horizontal=True); negative scrolls down
-        (left when horizontal=True). Pass window_title to bring that window to
-        the front first.
+        (left when horizontal=True). Keyboard and mouse are blocked for the
+        injection. Pass window_title to bring that window to the front first;
+        the previously focused window gets focus back afterwards.
         """
         return runtime.scroll(
             clicks, x=x, y=y, horizontal=horizontal, window_title=window_title

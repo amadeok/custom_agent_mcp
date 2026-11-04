@@ -60,10 +60,10 @@ task-start cue plays at begin and the descending task-end cue at end.
 
 begin_input_task takes mode="injection" (default) or mode="task". In injection
 mode physical input is not blocked while you observe, wait, or think: each input
-tool closes the gate only for the duration of its own injection and plays a
-short blip. In task mode keyboard and mouse stay blocked from task start until
-end_input_task, the emergency hotkey, or shutdown. Tagged input events still
-reach the desktop while the gate is closed.
+tool closes the gate only for the duration of its own injection, blocks both
+keyboard and mouse, and plays a short blip. In task mode keyboard and mouse stay
+blocked from task start until end_input_task, the emergency hotkey, or shutdown.
+Tagged input events still reach the desktop while the gate is closed.
 
 Choose the mode deliberately:
 - Use injection (the default) for ordinary GUI automation. The human keeps
@@ -80,11 +80,14 @@ Choose the mode deliberately:
 
 Input is not held between calls, so the foreground window can change while you
 observe or think. Always pass the window_title you inspected to press_key and
-type_text: these tools never change focus on their own, so if that window lost
-focus the server blocks input, forces it back to the foreground, then sends the
-keys. If focus cannot be restored the call fails and nothing is sent. click,
-drag, and scroll accept window_title too, which prevents another window covering
-the mouse target. Use focus_window when you only need to raise a window.
+type_text: if that window lost focus, the server blocks keyboard and mouse,
+forces it to the foreground, sends the keys, and then gives focus back to the
+window that had it before. If the target cannot be focused the call fails and
+nothing is sent; if the previous window cannot be focused again the call also
+fails, so focus is never silently left on the wrong window. click, drag, and
+scroll accept window_title too: they focus the target for the injection, which
+prevents another window covering the mouse target, and then restore the previous
+focus. Use focus_window when you deliberately want to leave a window in front.
 
 block_user_input is a manual override that holds input blocked across steps; do
 not use it for normal tasks. If you do use it, pass a bounded ttl, confirm the

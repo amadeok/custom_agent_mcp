@@ -753,17 +753,17 @@ class PyFindRuntime:
         return import_inject()
 
     @contextmanager
-    def _gated_injection(
-        self,
-        *,
-        keyboard: bool,
-        mouse: bool,
-    ) -> Iterator[None]:
-        """Block only for the duration of one injection and release in finally."""
+    def _gated_injection(self) -> Iterator[None]:
+        """Block keyboard and mouse for the duration of one injection.
+
+        Both devices are always blocked: focus is taken and released inside the
+        same gate, so physical input can neither race the focus change nor land
+        in a window other than the intended one.
+        """
         with self._input_lock:
             lease = None
             if self.settings.allow_input_gate:
-                lease = self.input_gate.begin_injection(keyboard=keyboard, mouse=mouse)
+                lease = self.input_gate.begin_injection(keyboard=True, mouse=True)
             try:
                 if self.settings.beep:
                     beep.injection_cue()
@@ -772,33 +772,67 @@ class PyFindRuntime:
                 if lease is not None:
                     self.input_gate.end_injection(**lease)
 
+    @staticmethod
+    def _restore_focus(handle: int, title: str | None) -> None:
+        """Restore foreground focus captured before the injection.
+
+        A failure is always raised. When the injection itself is already
+        unwinding with an error, both failures are reported together so neither
+        is lost.
+        """
+        if handle == 0:
+            return
+        pending = sys.exc_info()[1]
+        try:
+            focus_support.restore_foreground(handle, title=title)
+        except Exception as exc:
+            if pending is None:
+                raise
+            raise PyFindRuntimeError(
+                f"Focus was not restored to {title or handle!r} after the injection: "
+                f"{exc} (the call also failed: {pending})"
+            ) from exc
+
     @contextmanager
     def _focused_gated_injection(
         self,
         *,
-        keyboard: bool,
-        mouse: bool,
         window_title: str | None,
     ) -> Iterator[dict[str, Any]]:
-        """Focus the named window, then run one gated injection.
+        """Focus the named window, run one gated injection, then restore focus.
 
-        Input is already blocked for the injection when focus must be restored,
-        so a delayed focus change cannot race the keystroke. If the window
+        The gate blocks keyboard and mouse before focus is taken and stays
+        closed until the previous window has focus again. If the target window
         cannot be focused, :class:`FocusNotAcquiredError` is raised and nothing
-        is injected.
+        is injected. If the previous window cannot be focused again afterwards,
+        the call raises instead of silently leaving focus stolen.
         """
         with self._input_lock:
             window: dict[str, Any] | None = None
             recovered = False
+            focus_attempted = False
+            restore_done = False
+            previous_handle = 0
+            previous_title: str | None = None
             lease = None
+            payload: dict[str, Any] = {
+                "window_title": None,
+                "window_handle": None,
+                "focus_recovered": False,
+                "focus_restored": False,
+                "previous_window_title": None,
+                "previous_window_handle": None,
+            }
             try:
                 if window_title is not None:
                     window = self.find_window(window_title)
                     handle = int(window["handle"])
+                    payload["window_title"] = window["title"]
+                    payload["window_handle"] = handle
                     if not focus_support.owns_foreground(handle):
                         if self.settings.allow_input_gate:
                             lease = self.input_gate.begin_injection(
-                                keyboard=keyboard, mouse=mouse
+                                keyboard=True, mouse=True
                             )
                         else:
                             logger.warning(
@@ -807,20 +841,53 @@ class PyFindRuntime:
                                 "focus races.",
                                 window["title"],
                             )
+                        # Capture only after the gate is closed, so the window
+                        # recorded as "previous" is the one the user had before
+                        # the focus change, not a window that raced the block.
+                        previous_handle, previous_title = (
+                            focus_support.capture_foreground()
+                        )
+                        if previous_handle == handle:
+                            # The target won the race and is already in front;
+                            # there is no other window to restore afterwards.
+                            previous_handle, previous_title = 0, None
+                        payload["previous_window_handle"] = previous_handle or None
+                        payload["previous_window_title"] = previous_title
+                        focus_attempted = True
                         focus_support.ensure_foreground(
                             handle, title=window["title"]
                         )
                         recovered = True
+                        payload["focus_recovered"] = True
 
-                with self._gated_injection(keyboard=keyboard, mouse=mouse):
-                    yield {
-                        "window_title": window["title"] if window else None,
-                        "window_handle": int(window["handle"]) if window else None,
-                        "focus_recovered": recovered,
-                    }
+                with self._gated_injection():
+                    try:
+                        yield payload
+                    finally:
+                        # Restore while input is still blocked, so nothing can
+                        # steal focus between the injection and the restore.
+                        restore_done = True
+                        self._restore_focus(previous_handle, previous_title)
+                        payload["focus_restored"] = bool(
+                            recovered and previous_handle
+                        )
             finally:
-                if lease is not None:
-                    self.input_gate.end_injection(**lease)
+                try:
+                    # ensure_foreground can fail after Windows already moved
+                    # focus (a verification timeout). Put the previous window
+                    # back before the gate opens, so a failed call never leaves
+                    # focus stolen.
+                    if (
+                        not restore_done
+                        and focus_attempted
+                        and previous_handle
+                        and not focus_support.owns_foreground(previous_handle)
+                    ):
+                        self._restore_focus(previous_handle, previous_title)
+                finally:
+                    # The gate must open even when focus restoration failed.
+                    if lease is not None:
+                        self.input_gate.end_injection(**lease)
 
     def focus_window(
         self,
@@ -898,9 +965,7 @@ class PyFindRuntime:
         inject = self._inject()
         mods = self._validate_modifiers(modifiers)
         pressed: list[str] = []
-        with self._focused_gated_injection(
-            keyboard=bool(mods), mouse=True, window_title=window_title
-        ) as focused:
+        with self._focused_gated_injection(window_title=window_title) as focused:
             try:
                 for modifier in mods:
                     inject.key_down(modifier)
@@ -931,7 +996,7 @@ class PyFindRuntime:
         self._require_input()
         self._validate_point(x, y)
         inject = self._inject()
-        with self._gated_injection(keyboard=False, mouse=True):
+        with self._gated_injection():
             inject.mouse_move_to(x, y)
         return {"ok": True, "x": x, "y": y}
 
@@ -942,7 +1007,7 @@ class PyFindRuntime:
         y = position["y"] + int(dy)
         self._validate_point(x, y)
         inject = self._inject()
-        with self._gated_injection(keyboard=False, mouse=True):
+        with self._gated_injection():
             inject.mouse_move_to(x, y)
         return {"ok": True, "dx": dx, "dy": dy, "x": x, "y": y}
 
@@ -971,9 +1036,7 @@ class PyFindRuntime:
         inject = self._inject()
         mods = self._validate_modifiers(modifiers)
         pressed: list[str] = []
-        with self._focused_gated_injection(
-            keyboard=bool(mods), mouse=True, window_title=window_title
-        ) as focused:
+        with self._focused_gated_injection(window_title=window_title) as focused:
             try:
                 for modifier in mods:
                     inject.key_down(modifier)
@@ -1020,9 +1083,7 @@ class PyFindRuntime:
         if not 0.0 <= interval <= 5.0:
             raise ValueError("interval must be between 0 and 5 seconds")
         inject = self._inject()
-        with self._focused_gated_injection(
-            keyboard=True, mouse=False, window_title=window_title
-        ) as focused:
+        with self._focused_gated_injection(window_title=window_title) as focused:
             if interval <= 0:
                 inject.type_text(text)
             else:
@@ -1045,9 +1106,7 @@ class PyFindRuntime:
         if not 0.0 <= hold <= 5.0:
             raise ValueError("hold must be between 0 and 5 seconds")
         inject = self._inject()
-        with self._focused_gated_injection(
-            keyboard=True, mouse=False, window_title=window_title
-        ) as focused:
+        with self._focused_gated_injection(window_title=window_title) as focused:
             if len(parts) > 1:
                 inject.combo(parts, hold=hold)
             else:
@@ -1071,9 +1130,7 @@ class PyFindRuntime:
         if x is not None and y is not None:
             self._validate_point(x, y)
         inject = self._inject()
-        with self._focused_gated_injection(
-            keyboard=False, mouse=True, window_title=window_title
-        ) as focused:
+        with self._focused_gated_injection(window_title=window_title) as focused:
             if x is not None and y is not None:
                 inject.mouse_move_to(x, y)
             delta = int(clicks) * self._WHEEL_UNIT

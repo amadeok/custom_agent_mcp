@@ -940,6 +940,34 @@ class PyFindRuntime:
             except Exception:
                 logger.exception("Could not release modifier {!r}", modifier)
 
+    @staticmethod
+    def _restore_point(
+        final_x: int,
+        final_y: int,
+        *,
+        enabled: bool,
+    ) -> dict[str, int] | None:
+        """Return the pointer position to restore, or None when it would not move."""
+        if not enabled:
+            return None
+        current = _cursor_position()
+        if current["x"] == final_x and current["y"] == final_y:
+            return None
+        return current
+
+    @staticmethod
+    def _restore_pointer(inject: Any, point: dict[str, int] | None) -> bool:
+        if point is None:
+            return False
+        try:
+            inject.mouse_move_to(point["x"], point["y"])
+        except Exception:
+            logger.exception(
+                "Could not restore the pointer to ({}, {})", point["x"], point["y"]
+            )
+            return False
+        return True
+
     def click(
         self,
         x: int,
@@ -950,6 +978,7 @@ class PyFindRuntime:
         interval: float = 0.0,
         modifiers: Sequence[str] | None = None,
         window_title: str | None = None,
+        restore_cursor: bool = True,
     ) -> dict[str, Any]:
         self._require_input()
         if button not in self._CLICK_BUTTONS:
@@ -965,7 +994,14 @@ class PyFindRuntime:
         inject = self._inject()
         mods = self._validate_modifiers(modifiers)
         pressed: list[str] = []
+        # button="move" is an explicit pointer move; restoring would undo it.
+        restored = False
         with self._focused_gated_injection(window_title=window_title) as focused:
+            # Capture after the gate closes, so the saved position is what the
+            # user had before the injection, not a position they raced to.
+            restore = self._restore_point(
+                x, y, enabled=restore_cursor and button != "move"
+            )
             try:
                 for modifier in mods:
                     inject.key_down(modifier)
@@ -982,6 +1018,7 @@ class PyFindRuntime:
                     )
             finally:
                 self._release_modifiers(inject, pressed)
+                restored = self._restore_pointer(inject, restore)
         return {
             "ok": True,
             "x": x,
@@ -989,6 +1026,7 @@ class PyFindRuntime:
             "button": button,
             "clicks": clicks,
             "modifiers": mods,
+            "cursor_restored": restored,
             **focused,
         }
 
@@ -1022,6 +1060,7 @@ class PyFindRuntime:
         duration: float = 0.2,
         modifiers: Sequence[str] | None = None,
         window_title: str | None = None,
+        restore_cursor: bool = True,
     ) -> dict[str, Any]:
         self._require_input()
         if button not in self._DRAG_BUTTONS:
@@ -1036,7 +1075,11 @@ class PyFindRuntime:
         inject = self._inject()
         mods = self._validate_modifiers(modifiers)
         pressed: list[str] = []
+        restored = False
         with self._focused_gated_injection(window_title=window_title) as focused:
+            restore = self._restore_point(
+                to_x, to_y, enabled=restore_cursor
+            )
             try:
                 for modifier in mods:
                     inject.key_down(modifier)
@@ -1060,6 +1103,7 @@ class PyFindRuntime:
                         logger.exception("Could not release mouse button {!r} after drag", button)
             finally:
                 self._release_modifiers(inject, pressed)
+                restored = self._restore_pointer(inject, restore)
         return {
             "ok": True,
             "from": {"x": from_x, "y": from_y},
@@ -1067,6 +1111,7 @@ class PyFindRuntime:
             "button": button,
             "duration": duration,
             "modifiers": mods,
+            "cursor_restored": restored,
             **focused,
         }
 
@@ -1121,6 +1166,7 @@ class PyFindRuntime:
         y: int | None = None,
         horizontal: bool = False,
         window_title: str | None = None,
+        restore_cursor: bool = True,
     ) -> dict[str, Any]:
         self._require_input()
         if clicks == 0:
@@ -1130,11 +1176,21 @@ class PyFindRuntime:
         if x is not None and y is not None:
             self._validate_point(x, y)
         inject = self._inject()
+        restored = False
         with self._focused_gated_injection(window_title=window_title) as focused:
-            if x is not None and y is not None:
-                inject.mouse_move_to(x, y)
-            delta = int(clicks) * self._WHEEL_UNIT
-            inject.mouse_scroll(delta, horizontal=horizontal)
+            # Without x/y the pointer never moves, so there is nothing to restore.
+            restore = (
+                self._restore_point(x, y, enabled=restore_cursor)
+                if x is not None and y is not None
+                else None
+            )
+            try:
+                if x is not None and y is not None:
+                    inject.mouse_move_to(x, y)
+                delta = int(clicks) * self._WHEEL_UNIT
+                inject.mouse_scroll(delta, horizontal=horizontal)
+            finally:
+                restored = self._restore_pointer(inject, restore)
         return {
             "ok": True,
             "clicks": clicks,
@@ -1142,6 +1198,7 @@ class PyFindRuntime:
             "horizontal": horizontal,
             "x": x,
             "y": y,
+            "cursor_restored": restored,
             **focused,
         }
 

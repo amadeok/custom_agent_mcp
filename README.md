@@ -140,13 +140,13 @@ Observation tools are always available. Injection tools require `PYFIND_MCP_ALLO
 | `find_image` | read-only | PyFind PNG/WebP template matching with threshold and wait timeout |
 | `list_templates` | read-only | Available PNG/WebP templates and image dimensions |
 | `reload_templates` | read-only | Clear and rebuild the template cache |
-| `click` | input | Tagged click or move at absolute coordinates; optional held modifiers and `window_title` focus check |
-| `move_mouse` | input | Move the pointer to absolute coordinates |
-| `move_mouse_by` | input | Move the pointer by an exact pixel offset |
-| `drag` | input | Press, move, and release a mouse button safely; optional `window_title` focus check |
+| `click` | input | Tagged click or move; optional modifiers and `window_title` focus check; restores the pointer afterwards |
+| `move_mouse` | input | Move the pointer to absolute coordinates (leaves it there) |
+| `move_mouse_by` | input | Move the pointer by an exact pixel offset (leaves it there) |
+| `drag` | input | Press, move, and release a mouse button safely; restores the pointer afterwards |
 | `type_text` | input | Type Unicode text via `loge2.inject`; pass `window_title` to focus it for the injection and restore the previous focus after |
 | `press_key` | input | Press a key or hotkey such as `ctrl+shift+s`; pass `window_title` to focus it for the injection and restore the previous focus after |
-| `scroll` | input | Scroll the mouse wheel vertically or horizontally; optional `window_title` focus check |
+| `scroll` | input | Scroll the wheel vertically or horizontally; restores the pointer if `x`/`y` moved it |
 | `focus_window` | input | Force a window to the foreground and confirm it has focus |
 | `cursor_position` | read-only | Current pointer position |
 | `begin_input_task` | gate | Start an injected-input task; `mode="injection"` blocks per call, `mode="task"` blocks until the task ends |
@@ -167,6 +167,10 @@ Pass `mode` to `begin_input_task` to choose per task; omitting it uses `PYFIND_M
 The agent chooses from the tool description and the server instructions, which say: use `injection` unless the user explicitly asks for a full lockout or the workflow cannot tolerate human input (a held drag, rapid multi-step entry with no safe pause, or an unattended run); when unsure, use `injection`. The environment variable only changes the default for tasks that omit `mode`. To force a lockout independent of tasks, use `block_user_input` instead.
 
 Because input is not held between calls, the foreground window can change while the agent observes or thinks, and a keystroke sent to the wrong window is silently lost. Pass `window_title` to `press_key` or `type_text` to make the call target-specific. Every injection then runs the same guarded sequence: the server blocks **keyboard and mouse**, captures the window that currently has focus, checks whether the named window (or one of its dialogs) already has focus, and if not calls `pyutmisc.windows.foreground.force_foreground` and waits briefly for Windows to report it as foreground. It sends the input, puts the previously focused window back in the foreground, and only then opens the gate again. If the target cannot be focused the call raises and **no key is sent**; if the previous window cannot be focused again afterwards the call also raises, so focus is never silently left on the wrong window. `click`, `drag`, and `scroll` accept `window_title` too: they focus the target for the injection, which also protects against another window covering the click target, and then restore the previous focus. `focus_window` is the exception: it is an explicit focus request, so it leaves the window in front.
+
+### Pointer restoration
+
+`click`, `drag`, and `scroll` return the pointer to the position it had before the call, by default. The restore is a tagged move inside the same gate, so it still works while input is blocked and happens before focus is restored. If the pointer is already at the final position no extra move is sent; `scroll` without `x`/`y` never moves the pointer, so it has nothing to restore. Pass `restore_cursor=False` when the next step needs the pointer to stay where it is, for example a sequence of clicks at nearby coordinates. `move_mouse` and `move_mouse_by` are explicit pointer moves and always leave the pointer at the requested position; `click(button="move")` behaves the same way. The result reports `cursor_restored` in every case.
 
 `begin_input_task` plays an ascending start cue, each injection plays a short high blip, and `end_input_task` plays a descending end cue. Cues are played asynchronously, so they never delay a tool or a hook. Set `PYFIND_MCP_BEEP=false` to silence them; a failed beep never prevents an injection or a release.
 
@@ -218,7 +222,7 @@ Mask templates, directories of templates, and multi-scale matching are not suppo
    enough.
 3. `find_text` / `find_image` to get absolute coordinates.
 4. Call `begin_input_task` (ascending start cue). Use the default `injection` mode when the human should keep working between steps, or `mode="task"` to hold input blocked until the task ends.
-5. Use `click`, `move_mouse`, `drag`, `type_text`, `press_key`, or `scroll`. Each call blocks keyboard and mouse only for that injection and plays a short blip. Pass the inspected `window_title` to input calls so the server focuses it for the injection, then gives focus back to the window that had it before; either focus failure raises instead of being silent.
+5. Use `click`, `move_mouse`, `drag`, `type_text`, `press_key`, or `scroll`. Each call blocks keyboard and mouse only for that injection and plays a short blip. Pass the inspected `window_title` to input calls so the server focuses it for the injection, then gives focus back to the window that had it before; either focus failure raises instead of being silent. Clicks, drags, and targeted scrolls also put the pointer back where it was; pass `restore_cursor=False` only when it should stay at the target.
 6. Call `end_input_task` when the test finishes, even if it failed (descending end cue), then take another screenshot to verify the result.
 
 ## Safety

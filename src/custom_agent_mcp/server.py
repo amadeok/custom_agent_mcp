@@ -89,6 +89,12 @@ scroll accept window_title too: they focus the target for the injection, which
 prevents another window covering the mouse target, and then restore the previous
 focus. Use focus_window when you deliberately want to leave a window in front.
 
+click, drag, and scroll return the pointer to where it was before the call, so
+the human's cursor is not left somewhere random. This happens inside the same
+gate and before focus is restored. Pass restore_cursor=false only when the next
+step needs the pointer to remain at the target. move_mouse, move_mouse_by, and
+click(button="move") are explicit moves and never restore.
+
 block_user_input is a manual override that holds input blocked across steps; do
 not use it for normal tasks. If you do use it, pass a bounded ttl, confirm the
 state with input_block_status, and call unblock_user_input when the task

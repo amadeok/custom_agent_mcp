@@ -42,6 +42,7 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
         interval: float = 0.0,
         modifiers: list[str] | None = None,
         window_title: str | None = None,
+        restore_cursor: bool = True,
     ) -> dict[str, Any]:
         """Click at absolute screen coordinates, or move the pointer with button="move".
 
@@ -51,6 +52,9 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
         are blocked for the injection. Pass window_title to bring that window to
         the front first; the click fails instead of hitting a window that covers
         the target, and the previously focused window gets focus back afterwards.
+        By default the pointer returns to where it was before the click;
+        restore_cursor=False leaves it at the target. button="move" never
+        restores, because moving the pointer is the whole action.
         """
         return runtime.click(
             x,
@@ -60,6 +64,7 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
             interval=interval,
             modifiers=modifiers,
             window_title=window_title,
+            restore_cursor=restore_cursor,
         )
 
     @mcp.tool(annotations=WRITE)
@@ -85,13 +90,16 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
         duration: float = 0.2,
         modifiers: list[str] | None = None,
         window_title: str | None = None,
+        restore_cursor: bool = True,
     ) -> dict[str, Any]:
         """Press a mouse button at one point, move to another, and release it.
 
         The button is released in a finally block, so a failed drag cannot leave
         the desktop with a held mouse button. Keyboard and mouse are blocked for
         the whole drag. Pass window_title to bring that window to the front
-        first; the previously focused window gets focus back afterwards.
+        first; the previously focused window gets focus back afterwards. By
+        default the pointer returns to where it was before the drag;
+        restore_cursor=False leaves it at the drop point.
         """
         return runtime.drag(
             from_x,
@@ -102,6 +110,7 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
             duration=duration,
             modifiers=modifiers,
             window_title=window_title,
+            restore_cursor=restore_cursor,
         )
 
     @mcp.tool(annotations=WRITE)
@@ -154,16 +163,24 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
         y: int | None = None,
         horizontal: bool = False,
         window_title: str | None = None,
+        restore_cursor: bool = True,
     ) -> dict[str, Any]:
         """Scroll the mouse wheel.
 
         Positive scrolls up (right when horizontal=True); negative scrolls down
         (left when horizontal=True). Keyboard and mouse are blocked for the
         injection. Pass window_title to bring that window to the front first;
-        the previously focused window gets focus back afterwards.
+        the previously focused window gets focus back afterwards. When x/y move
+        the pointer to the scroll target, it returns to its previous position
+        afterwards unless restore_cursor=False.
         """
         return runtime.scroll(
-            clicks, x=x, y=y, horizontal=horizontal, window_title=window_title
+            clicks,
+            x=x,
+            y=y,
+            horizontal=horizontal,
+            window_title=window_title,
+            restore_cursor=restore_cursor,
         )
 
     @mcp.tool(annotations=READ_ONLY)

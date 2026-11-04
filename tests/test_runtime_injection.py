@@ -372,7 +372,10 @@ def test_click_focuses_target_then_restores_previous_focus(tmp_path, monkeypatch
     _fake_window(runtime)
     _stub_focus(monkeypatch, gate, owns=lambda h: False)
 
-    result = runtime.click(10, 10, window_title="Notepad")
+    # Cursor restoration has its own tests; disable it to isolate focus.
+    result = runtime.click(
+        10, 10, window_title="Notepad", restore_cursor=False
+    )
     runtime.close()
 
     assert result["focus_restored"] is True
@@ -385,6 +388,146 @@ def test_click_focuses_target_then_restores_previous_focus(tmp_path, monkeypatch
         ("end_injection", True, True, False),
     ]
     assert inject.calls == [("mouse_click_at", 10, 10, "left", 1, 0.0)]
+
+
+def _stub_cursor(monkeypatch, x=5, y=6):
+    monkeypatch.setattr(
+        runtime_module, "_cursor_position", lambda: {"x": x, "y": y}
+    )
+
+
+def test_click_restores_the_previous_pointer_position(tmp_path, monkeypatch):
+    runtime, _, inject = _runtime(tmp_path)
+    _stub_cursor(monkeypatch, 5, 6)
+
+    result = runtime.click(10, 10)
+    runtime.close()
+
+    assert inject.calls == [
+        ("mouse_click_at", 10, 10, "left", 1, 0.0),
+        ("mouse_move_to", 5, 6),
+    ]
+    assert result["cursor_restored"] is True
+
+
+def test_click_skips_the_restore_when_the_pointer_is_already_there(
+    tmp_path, monkeypatch
+):
+    runtime, _, inject = _runtime(tmp_path)
+    _stub_cursor(monkeypatch, 10, 10)
+
+    result = runtime.click(10, 10)
+    runtime.close()
+
+    assert inject.calls == [("mouse_click_at", 10, 10, "left", 1, 0.0)]
+    assert result["cursor_restored"] is False
+
+
+def test_click_can_leave_the_pointer_at_the_target(tmp_path, monkeypatch):
+    runtime, _, inject = _runtime(tmp_path)
+    _stub_cursor(monkeypatch, 5, 6)
+
+    result = runtime.click(10, 10, restore_cursor=False)
+    runtime.close()
+
+    assert inject.calls == [("mouse_click_at", 10, 10, "left", 1, 0.0)]
+    assert result["cursor_restored"] is False
+
+
+def test_move_click_does_not_restore(tmp_path, monkeypatch):
+    runtime, _, inject = _runtime(tmp_path)
+    _stub_cursor(monkeypatch, 5, 6)
+
+    result = runtime.click(10, 10, button="move")
+    runtime.close()
+
+    assert inject.calls == [("mouse_move_to", 10, 10)]
+    assert result["cursor_restored"] is False
+
+
+def test_click_restores_the_pointer_even_when_the_click_raises(
+    tmp_path, monkeypatch
+):
+    runtime, _, inject = _runtime(tmp_path)
+    _stub_cursor(monkeypatch, 5, 6)
+    inject.fail_on = "mouse_click_at"
+
+    with pytest.raises(RuntimeError, match="mouse_click_at failed"):
+        runtime.click(10, 10)
+    runtime.close()
+
+    assert inject.calls == [
+        ("mouse_click_at", 10, 10, "left", 1, 0.0),
+        ("mouse_move_to", 5, 6),
+    ]
+
+
+def test_click_survives_a_failed_cursor_restore(tmp_path, monkeypatch):
+    runtime, _, inject = _runtime(tmp_path)
+    _stub_cursor(monkeypatch, 5, 6)
+    inject.fail_on = "mouse_move_to"
+
+    result = runtime.click(10, 10)
+    runtime.close()
+
+    assert result["ok"] is True
+    assert result["cursor_restored"] is False
+
+
+def test_drag_returns_the_pointer_to_where_it_started(tmp_path, monkeypatch):
+    runtime, _, inject = _runtime(tmp_path)
+    _stub_cursor(monkeypatch, 5, 6)
+
+    result = runtime.drag(10, 10, 20, 20, duration=0)
+    runtime.close()
+
+    assert inject.calls == [
+        ("mouse_move_to", 10, 10),
+        ("mouse_down", "left"),
+        ("mouse_move_to", 20, 20),
+        ("mouse_up", "left"),
+        ("mouse_move_to", 5, 6),
+    ]
+    assert result["cursor_restored"] is True
+
+
+def test_drag_can_stay_at_the_drop_point(tmp_path, monkeypatch):
+    runtime, _, inject = _runtime(tmp_path)
+    _stub_cursor(monkeypatch, 5, 6)
+
+    result = runtime.drag(10, 10, 20, 20, duration=0, restore_cursor=False)
+    runtime.close()
+
+    assert inject.calls[-1] == ("mouse_up", "left")
+    assert result["cursor_restored"] is False
+
+
+def test_scroll_restores_the_pointer_after_moving_to_the_target(
+    tmp_path, monkeypatch
+):
+    runtime, _, inject = _runtime(tmp_path)
+    _stub_cursor(monkeypatch, 5, 6)
+
+    result = runtime.scroll(1, x=10, y=10)
+    runtime.close()
+
+    assert inject.calls == [
+        ("mouse_move_to", 10, 10),
+        ("mouse_scroll", 120, False),
+        ("mouse_move_to", 5, 6),
+    ]
+    assert result["cursor_restored"] is True
+
+
+def test_scroll_without_a_target_never_moves_the_pointer(tmp_path, monkeypatch):
+    runtime, _, inject = _runtime(tmp_path)
+    _stub_cursor(monkeypatch, 5, 6)
+
+    result = runtime.scroll(1)
+    runtime.close()
+
+    assert inject.calls == [("mouse_scroll", 120, False)]
+    assert result["cursor_restored"] is False
 
 
 def test_focus_window_forces_foreground(tmp_path, monkeypatch):

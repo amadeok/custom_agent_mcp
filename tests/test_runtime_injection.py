@@ -13,9 +13,9 @@ class FakeGate:
         self.calls: list[tuple] = []
         self.fail_begin = fail_begin
 
-    def begin_task(self) -> dict:
-        self.calls.append(("begin_task",))
-        return {"task_active": True, "task_started": True}
+    def begin_task(self, *, mode=None) -> dict:
+        self.calls.append(("begin_task", mode))
+        return {"task_active": True, "task_started": True, "task_mode": mode}
 
     def end_task(self) -> dict:
         self.calls.append(("end_task",))
@@ -178,11 +178,21 @@ def test_task_and_injection_cues_fire_around_actions(tmp_path, monkeypatch):
 
     assert cues == ["start", "injection", "end"]
     assert gate.calls == [
-        ("begin_task",),
+        ("begin_task", None),
         ("begin_injection", False, True),
         ("end_injection", False, True, False),
         ("end_task",),
     ]
+
+
+def test_begin_input_task_passes_the_mode_to_the_gate(tmp_path):
+    runtime, gate, _ = _runtime(tmp_path, beep=False)
+
+    runtime.begin_input_task(mode="task")
+    runtime.end_input_task()
+    runtime.close()
+
+    assert gate.calls == [("begin_task", "task"), ("end_task",)]
 
 
 def _fake_window(runtime, handle=42, title="Notepad"):

@@ -56,10 +56,15 @@ block_user_input is active.
 Blocking tools are enabled only when PYFIND_MCP_ALLOW_INPUT_GATE=true as well.
 For an injected-input task, call begin_input_task before the first input action
 and end_input_task after the last, even if the task failed. The ascending
-task-start cue plays at begin and the descending task-end cue at end. Physical
-input is not blocked while you observe, wait, or think: each input tool closes
-the gate only for the duration of its own injection and plays a short blip.
-Tagged input events still reach the desktop while the gate is closed.
+task-start cue plays at begin and the descending task-end cue at end.
+
+begin_input_task takes mode="injection" (default) or mode="task". In injection
+mode physical input is not blocked while you observe, wait, or think: each input
+tool closes the gate only for the duration of its own injection and plays a
+short blip. In task mode keyboard and mouse stay blocked from task start until
+end_input_task, the emergency hotkey, or shutdown; choose it when a human must
+not interfere for the whole task. Tagged input events still reach the desktop
+while the gate is closed.
 
 Input is not held between calls, so the foreground window can change while you
 observe or think. Always pass the window_title you inspected to press_key and

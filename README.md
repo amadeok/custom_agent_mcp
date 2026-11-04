@@ -112,6 +112,7 @@ Or use `/mcps` inside OpenCode.
 | `PYFIND_MCP_ALLOW_INPUT` | `false` | Register the injection tools |
 | `PYFIND_MCP_ALLOW_INPUT_GATE` | `false` | Register the task/blocking tools; requires `ALLOW_INPUT=true` |
 | `PYFIND_MCP_INPUT_GATE_HOTKEY` | `ctrl+alt+shift+f12` | Physical emergency-release combo; `none` disables it |
+| `PYFIND_MCP_INPUT_GATE_MODE` | `injection` | Default task mode: `injection` blocks per injection, `task` blocks from task start to end |
 | `PYFIND_MCP_INPUT_GATE_MAX_TTL` | `600` | Maximum optional auto-release TTL in seconds |
 | `PYFIND_MCP_BEEP` | `true` | Play winsound cues: task start/end and a short blip per injection |
 | `PYFIND_MCP_IMAGE_FORMAT` | `png` | Screenshot format: `png` or `webp` |
@@ -148,7 +149,7 @@ Observation tools are always available. Injection tools require `PYFIND_MCP_ALLO
 | `scroll` | input | Scroll the mouse wheel vertically or horizontally; optional `window_title` focus check |
 | `focus_window` | input | Force a window to the foreground and confirm it has focus |
 | `cursor_position` | read-only | Current pointer position |
-| `begin_input_task` | gate | Start an injected-input task; plays the ascending start cue; input stays available between injections |
+| `begin_input_task` | gate | Start an injected-input task; `mode="injection"` blocks per call, `mode="task"` blocks until the task ends |
 | `end_input_task` | gate | End the task, release any remaining block, and play the descending end cue |
 | `block_user_input` | gate | Manual override: hold physical input blocked across steps; persistent unless `ttl` is passed |
 | `unblock_user_input` | gate | Release a manual block created by `block_user_input` |
@@ -156,13 +157,18 @@ Observation tools are always available. Injection tools require `PYFIND_MCP_ALLO
 
 ### Input blocking
 
-Agent tasks use `begin_input_task` / `end_input_task`. The server keeps physical input **available between injections**: nothing swallows input while the agent is taking screenshots, waiting, or thinking. Each input tool closes the gate only for the duration of its own injection and opens it again in a `finally`.
+Agent tasks use `begin_input_task` / `end_input_task`, and there are two blocking modes:
+
+- **`injection`** (default) — physical input stays **available between calls**. Nothing swallows input while the agent is taking screenshots, waiting, or thinking. Each input tool closes the gate only for the duration of its own injection and opens it again in a `finally`. This is the least intrusive mode.
+- **`task`** — keyboard and mouse are blocked immediately at `begin_input_task` and stay blocked until `end_input_task`, the emergency hotkey, or server shutdown. Use it when a human must not interfere for the whole task, for example an unattended multi-step form fill.
+
+Pass `mode` to `begin_input_task` to choose per task; omitting it uses `PYFIND_MCP_INPUT_GATE_MODE` (default `injection`). The status tool reports the configured `mode` and the active `task_mode`. In `task` mode an injection is nested inside the task block, so it cannot open the gate early.
 
 Because input is not held between calls, the foreground window can change while the agent observes or thinks, and a keystroke sent to the wrong window is silently lost. Pass `window_title` to `press_key` or `type_text` to make the call target-specific: the server checks whether that window (or one of its dialogs) already has focus, and if not it closes the gate first, calls `pyutmisc.windows.foreground.force_foreground`, then waits briefly for Windows to report the window as foreground. If focus cannot be restored, the call raises an error and **no key is sent**, so the failure is visible instead of silently typing into the wrong window. `click`, `drag`, and `scroll` accept `window_title` too, which also protects against another window covering the click target. Use the standalone `focus_window` tool when you only need to bring a window forward.
 
 `begin_input_task` plays an ascending start cue, each injection plays a short high blip, and `end_input_task` plays a descending end cue. Cues are played asynchronously, so they never delay a tool or a hook. Set `PYFIND_MCP_BEEP=false` to silence them; a failed beep never prevents an injection or a release.
 
-The task tools install the keyboard hook at task start (for the emergency hotkey) and the mouse hook on the first mouse injection. Blocking itself is toggled per injection; the hooks stay installed for the task. If a device is already blocked when an injection starts — for example by a manual block — the server leaves it blocked when the injection ends.
+In `injection` mode the task tools install the keyboard hook at task start (for the emergency hotkey) and the mouse hook on the first mouse injection; blocking itself is toggled per injection, and the hooks stay installed for the task. In `task` mode both hooks are installed and both devices are blocked at task start. In either mode, if a device is already blocked when an injection starts — for example by the task block or a manual block — the server leaves it blocked when the injection ends.
 
 `block_user_input` is a manual override for cases where the human must be locked out continuously, not part of the normal task flow. By default that block is **persistent**: it ends only when `unblock_user_input` is called, the physical emergency hotkey is pressed (`Ctrl+Alt+Shift+F12` by default), or the MCP process exits (Windows removes the hooks). Pass `ttl` to arm an automatic release timer; the default maximum is 600 seconds. Calling `block_user_input` again extends or re-arms the block.
 
@@ -209,7 +215,7 @@ Mask templates, directories of templates, and multi-scale matching are not suppo
    be imperfect; use it when the model cannot see images or when plain text is
    enough.
 3. `find_text` / `find_image` to get absolute coordinates.
-4. Call `begin_input_task` (ascending start cue). Input stays available while the agent observes.
+4. Call `begin_input_task` (ascending start cue). Use the default `injection` mode when the human should keep working between steps, or `mode="task"` to hold input blocked until the task ends.
 5. Use `click`, `move_mouse`, `drag`, `type_text`, `press_key`, or `scroll`. Each call blocks input only for that injection and plays a short blip. Pass the inspected `window_title` to keyboard and mouse calls so the server restores focus first and fails loudly if it cannot.
 6. Call `end_input_task` when the test finishes, even if it failed (descending end cue), then take another screenshot to verify the result.
 
@@ -217,7 +223,7 @@ Mask templates, directories of templates, and multi-scale matching are not suppo
 
 - Input control is off by default. Set `PYFIND_MCP_ALLOW_INPUT=true` only when you intend to let the agent click and type.
 - Blocking is off by default and needs a second opt-in, `PYFIND_MCP_ALLOW_INPUT_GATE=true`.
-- The normal task flow blocks input only during each injection. The manual `block_user_input` override can still lock the human out continuously; use a bounded `ttl` and call `unblock_user_input` when done. If a run goes wrong, call `unblock_user_input` or press the emergency hotkey.
+- The default `injection` task mode blocks input only during each injection. Choosing `mode="task"` (or setting `PYFIND_MCP_INPUT_GATE_MODE=task`) holds input blocked from `begin_input_task` to `end_input_task`; the emergency hotkey still releases it. The manual `block_user_input` override can also lock the human out continuously; use a bounded `ttl` and call `unblock_user_input` when done. If a run goes wrong, call `end_input_task`/`unblock_user_input` or press the emergency hotkey.
 - The emergency hotkey (`Ctrl+Alt+Shift+F12` by default) releases the gate from physical input only. `Ctrl+Alt+Del` still opens the secure desktop, so Task Manager can end the MCP process if necessary.
 - Global hooks are not a security boundary. Any process that knows loge2's `dwExtraInfo` tag can forge a passthrough event, and elevated windows may ignore injected input because of UIPI.
 - Screen captures may contain passwords, tokens, or private content. Output stays in the local temp directory and is never uploaded by this server.

@@ -304,6 +304,67 @@ def test_begin_task_is_idempotent(tmp_path):
     assert status["task_started"] is False
 
 
+def test_begin_task_injection_mode_does_not_block(tmp_path):
+    backend = FakeGateBackend()
+    gate = InputGate(_settings(tmp_path), backend=backend)
+
+    status = gate.begin_task(mode="injection")
+
+    assert status["task_mode"] == "injection"
+    assert status["mode"] == "injection"
+    assert status["any_blocked"] is False
+    assert backend.escape_callback is not None
+
+
+def test_begin_task_task_mode_blocks_until_end(tmp_path):
+    backend = FakeGateBackend()
+    gate = InputGate(_settings(tmp_path), backend=backend)
+
+    status = gate.begin_task(mode="task")
+
+    assert status["task_active"] is True
+    assert status["task_mode"] == "task"
+    assert status["any_blocked"] is True
+    assert backend.keyboard_blocked is True
+    assert backend.mouse_blocked is True
+    assert backend.escape_callback is not None
+
+    # Injections are nested leases and must not open the task block.
+    lease = gate.begin_injection(keyboard=True, mouse=True)
+    assert lease == {"keyboard": False, "mouse": False, "escape": False}
+    gate.end_injection(**lease)
+    assert backend.keyboard_blocked is True
+    assert backend.mouse_blocked is True
+
+    status = gate.end_task()
+
+    assert status["task_mode"] is None
+    assert status["any_blocked"] is False
+    assert backend.keyboard_blocked is False
+    assert backend.mouse_blocked is False
+    assert backend.escape_callback is None
+
+
+def test_task_mode_defaults_from_settings(tmp_path):
+    backend = FakeGateBackend()
+    gate = InputGate(
+        _settings(tmp_path, input_gate_mode="task"), backend=backend
+    )
+
+    status = gate.begin_task()
+
+    assert status["task_mode"] == "task"
+    assert status["any_blocked"] is True
+    gate.end_task()
+
+
+def test_begin_task_rejects_unknown_mode(tmp_path):
+    gate = InputGate(_settings(tmp_path), backend=FakeGateBackend())
+
+    with pytest.raises(ValueError, match="mode"):
+        gate.begin_task(mode="always")
+
+
 def test_injection_blocks_only_its_devices_and_restores_them(tmp_path):
     backend = FakeGateBackend()
     gate = InputGate(_settings(tmp_path), backend=backend)

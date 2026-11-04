@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
@@ -32,19 +32,24 @@ TASK_START = ToolAnnotations(
     open_world_hint=False,
 )
 
+GATE_MODE = Literal["injection", "task"]
+
 
 def register_gate_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Settings) -> None:
     @mcp.tool(annotations=TASK_START)
     @tool_errors
-    def begin_input_task() -> dict[str, Any]:
-        """Start an injected-input task.
+    def begin_input_task(mode: GATE_MODE | None = None) -> dict[str, Any]:
+        """Start an injected-input task and play the ascending start cue.
 
-        Plays the ascending task-start cue. Physical input is not blocked while
-        the agent observes, waits, or thinks: each input tool blocks only for
-        the duration of its own injection and plays a short blip. Call
+        mode="injection" (default) keeps physical input available while the
+        agent observes, waits, or thinks: each input tool blocks only for its
+        own injection and plays a short blip. mode="task" blocks keyboard and
+        mouse immediately and holds them until end_input_task, the emergency
+        hotkey, or server shutdown; use it when a human must not interfere for
+        the whole task. The mode defaults to PYFIND_MCP_INPUT_GATE_MODE. Call
         end_input_task after the last action, even if the task failed.
         """
-        return runtime.begin_input_task()
+        return runtime.begin_input_task(mode=mode)
 
     @mcp.tool(annotations=RELEASE)
     @tool_errors

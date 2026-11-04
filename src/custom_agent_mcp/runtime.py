@@ -1095,10 +1095,10 @@ class PyFindRuntime:
     # ------------------------------------------------------------------
     # physical input gate
     # ------------------------------------------------------------------
-    def begin_input_task(self) -> dict[str, Any]:
+    def begin_input_task(self, *, mode: str | None = None) -> dict[str, Any]:
         self._require_input()
         with self._input_lock:
-            payload = self.input_gate.begin_task()
+            payload = self.input_gate.begin_task(mode=mode)
             if payload.get("task_started") and self.settings.beep:
                 beep.task_start_cue()
             return payload

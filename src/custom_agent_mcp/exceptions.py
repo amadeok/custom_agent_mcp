@@ -19,3 +19,7 @@ class InputDisabledError(PyFindRuntimeError):
 
 class Loge2NotInstalledError(PyFindRuntimeError):
     pass
+
+
+class FocusNotAcquiredError(PyFindRuntimeError):
+    pass

@@ -5,12 +5,16 @@ import atexit
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 from loguru import logger
 
+from . import beep
+from . import focus as focus_support
 from .exceptions import (
+    FocusNotAcquiredError,
     InputDisabledError,
     Loge2NotInstalledError,
     PyFindRuntimeError,
@@ -23,6 +27,7 @@ from .models import Rect, serialize_templates
 from .settings import Settings
 
 __all__ = [
+    "FocusNotAcquiredError",
     "InputDisabledError",
     "Loge2NotInstalledError",
     "PyFindRuntime",
@@ -30,6 +35,8 @@ __all__ = [
     "TemplateNotFoundError",
     "WindowNotFoundError",
 ]
+
+_TEMPLATE_SUFFIXES = (".png", ".webp")
 
 
 def _require_windows() -> None:
@@ -68,8 +75,9 @@ class PyFindRuntime:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.input_gate = InputGate(settings)
+        self.input_gate = InputGate(settings, preload=True)
         self._lock = threading.RLock()
+        self._input_lock = threading.RLock()
         self._finder: Any | None = None
         self._template_cache: dict[str, Any] = {}
         self._closed = False
@@ -504,7 +512,12 @@ class PyFindRuntime:
         templates_dir = self.settings.templates_dir
         templates_dir.mkdir(parents=True, exist_ok=True)
         items = []
-        for path in sorted(templates_dir.glob("*.png")):
+        paths = [
+            path
+            for suffix in _TEMPLATE_SUFFIXES
+            for path in templates_dir.glob(f"*{suffix}")
+        ]
+        for path in sorted(paths):
             width = height = 0
             try:
                 import cv2
@@ -539,17 +552,30 @@ class PyFindRuntime:
             path = raw.resolve()
         else:
             candidates = [self.settings.templates_dir / reference]
-            if raw.suffix.lower() != ".png":
-                candidates.append(self.settings.templates_dir / f"{reference}.png")
+            if raw.suffix.lower() not in _TEMPLATE_SUFFIXES:
+                candidates.extend(
+                    self.settings.templates_dir / f"{reference}{suffix}"
+                    for suffix in _TEMPLATE_SUFFIXES
+                )
             path = next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
             if path is None:
-                available = ", ".join(sorted(p.stem for p in self.settings.templates_dir.glob("*.png")))
+                available = ", ".join(
+                    sorted(
+                        {
+                            candidate.stem
+                            for suffix in _TEMPLATE_SUFFIXES
+                            for candidate in self.settings.templates_dir.glob(f"*{suffix}")
+                        }
+                    )
+                )
                 raise TemplateNotFoundError(
                     f"Template {reference!r} was not found. Available templates: {available or 'none'}"
                 )
 
-        if path.suffix.lower() != ".png":
-            raise ValueError(f"Only PNG templates are supported in v1, got {path.name!r}.")
+        if path.suffix.lower() not in _TEMPLATE_SUFFIXES:
+            raise ValueError(
+                f"Only PNG or WebP templates are supported, got {path.name!r}."
+            )
 
         key = str(path)
         if key not in self._template_cache:
@@ -726,6 +752,100 @@ class PyFindRuntime:
         self._require_input()
         return import_inject()
 
+    @contextmanager
+    def _gated_injection(
+        self,
+        *,
+        keyboard: bool,
+        mouse: bool,
+    ) -> Iterator[None]:
+        """Block only for the duration of one injection and release in finally."""
+        with self._input_lock:
+            lease = None
+            if self.settings.allow_input_gate:
+                lease = self.input_gate.begin_injection(keyboard=keyboard, mouse=mouse)
+            try:
+                if self.settings.beep:
+                    beep.injection_cue()
+                yield
+            finally:
+                if lease is not None:
+                    self.input_gate.end_injection(**lease)
+
+    @contextmanager
+    def _focused_gated_injection(
+        self,
+        *,
+        keyboard: bool,
+        mouse: bool,
+        window_title: str | None,
+    ) -> Iterator[dict[str, Any]]:
+        """Focus the named window, then run one gated injection.
+
+        Input is already blocked for the injection when focus must be restored,
+        so a delayed focus change cannot race the keystroke. If the window
+        cannot be focused, :class:`FocusNotAcquiredError` is raised and nothing
+        is injected.
+        """
+        with self._input_lock:
+            window: dict[str, Any] | None = None
+            recovered = False
+            lease = None
+            try:
+                if window_title is not None:
+                    window = self.find_window(window_title)
+                    handle = int(window["handle"])
+                    if not focus_support.owns_foreground(handle):
+                        if self.settings.allow_input_gate:
+                            lease = self.input_gate.begin_injection(
+                                keyboard=keyboard, mouse=mouse
+                            )
+                        else:
+                            logger.warning(
+                                "Focusing {!r} without the input gate: "
+                                "enable PYFIND_MCP_ALLOW_INPUT_GATE=true to prevent "
+                                "focus races.",
+                                window["title"],
+                            )
+                        focus_support.ensure_foreground(
+                            handle, title=window["title"]
+                        )
+                        recovered = True
+
+                with self._gated_injection(keyboard=keyboard, mouse=mouse):
+                    yield {
+                        "window_title": window["title"] if window else None,
+                        "window_handle": int(window["handle"]) if window else None,
+                        "focus_recovered": recovered,
+                    }
+            finally:
+                if lease is not None:
+                    self.input_gate.end_injection(**lease)
+
+    def focus_window(
+        self,
+        window_title: str,
+        *,
+        timeout: float = focus_support.FOREGROUND_SETTLE_TIMEOUT,
+    ) -> dict[str, Any]:
+        """Bring a window to the foreground and verify that it has focus."""
+        self._require_input()
+        if not 0 < timeout <= 5.0:
+            raise ValueError("timeout must be greater than 0 and at most 5 seconds")
+        window = self.find_window(window_title)
+        handle = int(window["handle"])
+        was_focused = focus_support.owns_foreground(handle)
+        focus_support.ensure_foreground(
+            handle, title=window["title"], timeout=timeout
+        )
+        return {
+            "ok": True,
+            "window_title": window["title"],
+            "window_handle": handle,
+            "was_focused": was_focused,
+            "focused": True,
+        }
+
     @staticmethod
     def _validate_modifiers(modifiers: Sequence[str] | None) -> list[str]:
         if not modifiers:
@@ -762,6 +882,7 @@ class PyFindRuntime:
         clicks: int = 1,
         interval: float = 0.0,
         modifiers: Sequence[str] | None = None,
+        window_title: str | None = None,
     ) -> dict[str, Any]:
         self._require_input()
         if button not in self._CLICK_BUTTONS:
@@ -777,22 +898,25 @@ class PyFindRuntime:
         inject = self._inject()
         mods = self._validate_modifiers(modifiers)
         pressed: list[str] = []
-        try:
-            for modifier in mods:
-                inject.key_down(modifier)
-                pressed.append(modifier)
-            if button == "move":
-                inject.mouse_move_to(x, y)
-            else:
-                inject.mouse_click_at(
-                    x,
-                    y,
-                    button=button,
-                    count=clicks,
-                    interval=interval,
-                )
-        finally:
-            self._release_modifiers(inject, pressed)
+        with self._focused_gated_injection(
+            keyboard=bool(mods), mouse=True, window_title=window_title
+        ) as focused:
+            try:
+                for modifier in mods:
+                    inject.key_down(modifier)
+                    pressed.append(modifier)
+                if button == "move":
+                    inject.mouse_move_to(x, y)
+                else:
+                    inject.mouse_click_at(
+                        x,
+                        y,
+                        button=button,
+                        count=clicks,
+                        interval=interval,
+                    )
+            finally:
+                self._release_modifiers(inject, pressed)
         return {
             "ok": True,
             "x": x,
@@ -800,13 +924,15 @@ class PyFindRuntime:
             "button": button,
             "clicks": clicks,
             "modifiers": mods,
+            **focused,
         }
 
     def move_mouse(self, x: int, y: int) -> dict[str, Any]:
         self._require_input()
         self._validate_point(x, y)
         inject = self._inject()
-        inject.mouse_move_to(x, y)
+        with self._gated_injection(keyboard=False, mouse=True):
+            inject.mouse_move_to(x, y)
         return {"ok": True, "x": x, "y": y}
 
     def move_mouse_by(self, dx: int, dy: int) -> dict[str, Any]:
@@ -816,7 +942,8 @@ class PyFindRuntime:
         y = position["y"] + int(dy)
         self._validate_point(x, y)
         inject = self._inject()
-        inject.mouse_move_to(x, y)
+        with self._gated_injection(keyboard=False, mouse=True):
+            inject.mouse_move_to(x, y)
         return {"ok": True, "dx": dx, "dy": dy, "x": x, "y": y}
 
     def drag(
@@ -829,6 +956,7 @@ class PyFindRuntime:
         button: str = "left",
         duration: float = 0.2,
         modifiers: Sequence[str] | None = None,
+        window_title: str | None = None,
     ) -> dict[str, Any]:
         self._require_input()
         if button not in self._DRAG_BUTTONS:
@@ -843,29 +971,32 @@ class PyFindRuntime:
         inject = self._inject()
         mods = self._validate_modifiers(modifiers)
         pressed: list[str] = []
-        try:
-            for modifier in mods:
-                inject.key_down(modifier)
-                pressed.append(modifier)
-            inject.mouse_move_to(from_x, from_y)
-            inject.mouse_down(button)
+        with self._focused_gated_injection(
+            keyboard=bool(mods), mouse=True, window_title=window_title
+        ) as focused:
             try:
-                if duration <= 0:
-                    inject.mouse_move_to(to_x, to_y)
-                else:
-                    steps = max(1, min(200, int(round(duration / 0.02))))
-                    for step in range(1, steps + 1):
-                        x = round(from_x + (to_x - from_x) * step / steps)
-                        y = round(from_y + (to_y - from_y) * step / steps)
-                        inject.mouse_move_to(x, y)
-                        time.sleep(duration / steps)
-            finally:
+                for modifier in mods:
+                    inject.key_down(modifier)
+                    pressed.append(modifier)
+                inject.mouse_move_to(from_x, from_y)
+                inject.mouse_down(button)
                 try:
-                    inject.mouse_up(button)
-                except Exception:
-                    logger.exception("Could not release mouse button {!r} after drag", button)
-        finally:
-            self._release_modifiers(inject, pressed)
+                    if duration <= 0:
+                        inject.mouse_move_to(to_x, to_y)
+                    else:
+                        steps = max(1, min(200, int(round(duration / 0.02))))
+                        for step in range(1, steps + 1):
+                            x = round(from_x + (to_x - from_x) * step / steps)
+                            y = round(from_y + (to_y - from_y) * step / steps)
+                            inject.mouse_move_to(x, y)
+                            time.sleep(duration / steps)
+                finally:
+                    try:
+                        inject.mouse_up(button)
+                    except Exception:
+                        logger.exception("Could not release mouse button {!r} after drag", button)
+            finally:
+                self._release_modifiers(inject, pressed)
         return {
             "ok": True,
             "from": {"x": from_x, "y": from_y},
@@ -873,24 +1004,40 @@ class PyFindRuntime:
             "button": button,
             "duration": duration,
             "modifiers": mods,
+            **focused,
         }
 
-    def type_text(self, text: str, *, interval: float = 0.0) -> dict[str, Any]:
+    def type_text(
+        self,
+        text: str,
+        *,
+        interval: float = 0.0,
+        window_title: str | None = None,
+    ) -> dict[str, Any]:
         self._require_input()
         if not text:
             raise ValueError("text must not be empty")
         if not 0.0 <= interval <= 5.0:
             raise ValueError("interval must be between 0 and 5 seconds")
         inject = self._inject()
-        if interval <= 0:
-            inject.type_text(text)
-        else:
-            for character in text:
-                inject.type_text(character)
-                time.sleep(interval)
-        return {"ok": True, "characters": len(text)}
+        with self._focused_gated_injection(
+            keyboard=True, mouse=False, window_title=window_title
+        ) as focused:
+            if interval <= 0:
+                inject.type_text(text)
+            else:
+                for character in text:
+                    inject.type_text(character)
+                    time.sleep(interval)
+        return {"ok": True, "characters": len(text), **focused}
 
-    def press_key(self, key: str, *, hold: float = 0.02) -> dict[str, Any]:
+    def press_key(
+        self,
+        key: str,
+        *,
+        hold: float = 0.02,
+        window_title: str | None = None,
+    ) -> dict[str, Any]:
         self._require_input()
         parts = [part.strip() for part in key.split("+") if part.strip()]
         if not parts:
@@ -898,11 +1045,14 @@ class PyFindRuntime:
         if not 0.0 <= hold <= 5.0:
             raise ValueError("hold must be between 0 and 5 seconds")
         inject = self._inject()
-        if len(parts) > 1:
-            inject.combo(parts, hold=hold)
-        else:
-            inject.tap(parts[0], hold=hold)
-        return {"ok": True, "keys": parts, "hold": hold}
+        with self._focused_gated_injection(
+            keyboard=True, mouse=False, window_title=window_title
+        ) as focused:
+            if len(parts) > 1:
+                inject.combo(parts, hold=hold)
+            else:
+                inject.tap(parts[0], hold=hold)
+        return {"ok": True, "keys": parts, "hold": hold, **focused}
 
     def scroll(
         self,
@@ -911,6 +1061,7 @@ class PyFindRuntime:
         x: int | None = None,
         y: int | None = None,
         horizontal: bool = False,
+        window_title: str | None = None,
     ) -> dict[str, Any]:
         self._require_input()
         if clicks == 0:
@@ -920,10 +1071,13 @@ class PyFindRuntime:
         if x is not None and y is not None:
             self._validate_point(x, y)
         inject = self._inject()
-        if x is not None and y is not None:
-            inject.mouse_move_to(x, y)
-        delta = int(clicks) * self._WHEEL_UNIT
-        inject.mouse_scroll(delta, horizontal=horizontal)
+        with self._focused_gated_injection(
+            keyboard=False, mouse=True, window_title=window_title
+        ) as focused:
+            if x is not None and y is not None:
+                inject.mouse_move_to(x, y)
+            delta = int(clicks) * self._WHEEL_UNIT
+            inject.mouse_scroll(delta, horizontal=horizontal)
         return {
             "ok": True,
             "clicks": clicks,
@@ -931,6 +1085,7 @@ class PyFindRuntime:
             "horizontal": horizontal,
             "x": x,
             "y": y,
+            **focused,
         }
 
     def cursor_position(self) -> dict[str, Any]:
@@ -940,6 +1095,22 @@ class PyFindRuntime:
     # ------------------------------------------------------------------
     # physical input gate
     # ------------------------------------------------------------------
+    def begin_input_task(self) -> dict[str, Any]:
+        self._require_input()
+        with self._input_lock:
+            payload = self.input_gate.begin_task()
+            if payload.get("task_started") and self.settings.beep:
+                beep.task_start_cue()
+            return payload
+
+    def end_input_task(self) -> dict[str, Any]:
+        # Ending a task is a safety path: never hide it behind allow_input.
+        with self._input_lock:
+            payload = self.input_gate.end_task()
+            if payload.get("task_ended") and self.settings.beep:
+                beep.task_end_cue()
+            return payload
+
     def block_user_input(
         self,
         *,
@@ -948,7 +1119,11 @@ class PyFindRuntime:
         ttl: float | None = None,
     ) -> dict[str, Any]:
         self._require_input()
-        return self.input_gate.arm(keyboard=keyboard, mouse=mouse, ttl=ttl)
+        with self._input_lock:
+            payload = self.input_gate.arm(keyboard=keyboard, mouse=mouse, ttl=ttl)
+            if self.settings.beep:
+                beep.task_start_cue()
+            return payload
 
     def unblock_user_input(
         self,
@@ -957,7 +1132,18 @@ class PyFindRuntime:
         mouse: bool = True,
     ) -> dict[str, Any]:
         # Release must never be hidden behind allow_input: it is the safety path.
-        return self.input_gate.release(keyboard=keyboard, mouse=mouse, reason="manual")
+        with self._input_lock:
+            was_blocked = self.input_gate.status().get("any_blocked", False)
+            payload = self.input_gate.release(
+                keyboard=keyboard, mouse=mouse, reason="manual"
+            )
+            if (
+                was_blocked
+                and not payload.get("any_blocked", False)
+                and self.settings.beep
+            ):
+                beep.task_end_cue()
+            return payload
 
     def input_block_status(self) -> dict[str, Any]:
         return self.input_gate.status()

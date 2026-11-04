@@ -8,6 +8,7 @@ from typing import Any, Callable, Protocol
 
 from loguru import logger
 
+from . import beep
 from .exceptions import Loge2NotInstalledError, PyFindRuntimeError
 from .loge2_support import INSTALL_HINT, import_local
 from .settings import Settings
@@ -207,11 +208,20 @@ class InputGate:
     ``ttl`` arms a timer that releases the gate automatically.
     """
 
-    def __init__(self, settings: Settings, backend: GateBackend | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        backend: GateBackend | None = None,
+        preload: bool = False,
+    ) -> None:
         self._settings = settings
         self._backend = backend
+        # Preloading imports the hook modules at server start instead of in the
+        # middle of an injection, so focus work is not interrupted by an import.
+        self._preload_backend = preload and backend is None
         self._lock = threading.RLock()
         self._closed = False
+        self._task_active = False
         self._timer: threading.Timer | None = None
         self._deadline: float | None = None
         self._ttl: float | None = None
@@ -219,6 +229,25 @@ class InputGate:
         self._escape_callback: _EmergencyRelease | None = None
         self._last_release_reason: str | None = None
         self._last_release_at: str | None = None
+        if self._preload_backend:
+            self.preload()
+
+    @property
+    def backend(self) -> GateBackend | None:
+        """The installed hook backend, or None when it is not available yet."""
+        return self._backend
+
+    def preload(self) -> bool:
+        """Create the hook backend now. Returns False when loge2 is missing."""
+        if not self._preload_backend:
+            return self._backend is not None
+        try:
+            with self._lock:
+                self._ensure_backend_locked()
+        except PyFindRuntimeError as exc:
+            logger.warning("Input gate backend is not available yet: {}", exc)
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # public API
@@ -343,6 +372,138 @@ class InputGate:
                 raise PyFindRuntimeError("; ".join(errors))
             return self._status_locked(backend)
 
+    def begin_task(self) -> dict[str, Any]:
+        """Start a gated input task without blocking physical input yet."""
+        hotkey = self._settings.input_gate_hotkey
+        with self._lock:
+            if self._closed:
+                raise PyFindRuntimeError("The input gate is closed.")
+            backend = self._ensure_backend_locked()
+            started = not self._task_active
+            if started:
+                if hotkey:
+                    backend.validate_hotkey(hotkey)
+                    self._install_escape_locked(backend, hotkey)
+                self._task_active = True
+                logger.info(
+                    "Input task started; input blocks only during each injection"
+                )
+            payload = self._status_locked(backend)
+            payload["task_started"] = started
+            return payload
+
+    def end_task(self) -> dict[str, Any]:
+        """End the current task and release any remaining block."""
+        with self._lock:
+            was_active = self._task_active
+            self._task_active = False
+            payload = self.release(reason="task_end")
+            payload["task_ended"] = was_active
+            return payload
+
+    def begin_injection(
+        self,
+        *,
+        keyboard: bool = True,
+        mouse: bool = True,
+    ) -> dict[str, bool]:
+        """Block the requested devices for one injection.
+
+        Returns a lease describing what this call newly blocked. Devices that
+        were already blocked (a manual block or another injection) are not
+        leased, so :meth:`end_injection` will not open them.
+        """
+        if not keyboard and not mouse:
+            raise ValueError("Select at least one of keyboard or mouse.")
+
+        hotkey = self._settings.input_gate_hotkey
+        with self._lock:
+            if self._closed:
+                raise PyFindRuntimeError("The input gate is closed.")
+            backend = self._ensure_backend_locked()
+
+            escape_owned = False
+            if self._escape_callback is None and hotkey:
+                backend.validate_hotkey(hotkey)
+                self._install_escape_locked(backend, hotkey)
+                escape_owned = True
+
+            own_keyboard = keyboard and not self._device_blocked(backend, "keyboard")
+            own_mouse = mouse and not self._device_blocked(backend, "mouse")
+
+            armed: list[str] = []
+            try:
+                # The escape path is installed before any block, so there is
+                # never a blocked moment without a physical way out.
+                if keyboard:
+                    backend.block_keyboard()
+                    armed.append("keyboard")
+                if mouse:
+                    backend.block_mouse()
+                    armed.append("mouse")
+            except Exception:
+                for device in reversed(armed):
+                    owned = own_keyboard if device == "keyboard" else own_mouse
+                    if not owned:
+                        continue
+                    try:
+                        if device == "keyboard":
+                            backend.unblock_keyboard()
+                        else:
+                            backend.unblock_mouse()
+                    except Exception:
+                        logger.exception("Failed to roll back the %s block", device)
+                if escape_owned:
+                    try:
+                        self._remove_escape_locked(backend)
+                    except Exception:
+                        logger.exception("Failed to remove the input gate hotkey")
+                raise
+
+            return {
+                "keyboard": own_keyboard,
+                "mouse": own_mouse,
+                "escape": escape_owned,
+            }
+
+    def end_injection(
+        self,
+        *,
+        keyboard: bool = False,
+        mouse: bool = False,
+        escape: bool = False,
+    ) -> None:
+        """Release the devices leased by :meth:`begin_injection`."""
+        with self._lock:
+            backend = self._backend
+            if backend is None:
+                return
+
+            errors: list[str] = []
+            if keyboard:
+                try:
+                    backend.unblock_keyboard()
+                except Exception as exc:
+                    errors.append(f"keyboard: {exc}")
+            if mouse:
+                try:
+                    backend.unblock_mouse()
+                except Exception as exc:
+                    errors.append(f"mouse: {exc}")
+
+            if (
+                escape
+                and not self._task_active
+                and not self._any_blocked(backend)
+            ):
+                try:
+                    self._remove_escape_locked(backend)
+                except Exception as exc:
+                    errors.append(f"hotkey: {exc}")
+
+            if errors:
+                logger.warning("Could not fully release an injection: {}", "; ".join(errors))
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             if self._backend is None:
@@ -361,17 +522,23 @@ class InputGate:
 
     def trigger_emergency_release(self) -> None:
         logger.warning("Input gate emergency hotkey pressed; releasing.")
+        with self._lock:
+            self._task_active = False
         try:
             # This runs on the keyboard hook thread; avoid a second log write.
             self.release(reason="emergency_hotkey", log=False)
         except Exception:
             logger.exception("Failed to release the input gate from the hotkey")
+        else:
+            if self._settings.beep:
+                beep.task_end_cue()
 
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
             self._closed = True
+            self._task_active = False
             self._cancel_timer_locked()
             backend = self._backend
             self._escape_callback = None
@@ -420,6 +587,15 @@ class InputGate:
             mouse_blocked = False
         return bool(keyboard_blocked or mouse_blocked)
 
+    @staticmethod
+    def _device_blocked(backend: GateBackend, device: str) -> bool:
+        try:
+            if device == "keyboard":
+                return bool(backend.keyboard_state()[0])
+            return bool(backend.mouse_state()[0])
+        except Exception:
+            return False
+
     def _set_deadline_locked(self, ttl: float | None) -> None:
         self._cancel_timer_locked()
         self._ttl = ttl
@@ -450,6 +626,9 @@ class InputGate:
                 self.release(reason="ttl")
             except Exception:
                 logger.exception("Failed to auto-release the input gate")
+            else:
+                if self._settings.beep:
+                    beep.task_end_cue()
 
     def _status_locked(
         self,
@@ -481,6 +660,7 @@ class InputGate:
         payload: dict[str, Any] = {
             "available": bool(available),
             "closed": self._closed,
+            "task_active": self._task_active,
             "keyboard_blocked": bool(keyboard_blocked),
             "mouse_blocked": bool(mouse_blocked),
             "keyboard_hook_running": bool(keyboard_running),

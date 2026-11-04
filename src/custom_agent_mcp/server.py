@@ -37,9 +37,10 @@ All rectangles are absolute virtual-screen pixels. Secondary monitors may have
 negative x or y values. A rectangle is {x, y, width, height}. Use at most one of
 window_title, monitor, or region in a call.
 
-screenshot writes a full-resolution PNG and returns a downscaled preview plus
-the full path. Templates for find_image are PNG names from the configured
-templates directory, or absolute PNG paths.
+screenshot writes a full-resolution image (PNG by default, or WebP when
+configured) and returns a downscaled preview plus the full path. Templates for
+find_image are PNG or WebP names from the configured templates directory, or
+absolute paths.
 
 If your model has native vision, prefer reading a screenshot with your own
 vision over the ocr tool: vision keeps layout, icons, and styling, and usually
@@ -53,10 +54,27 @@ They inject through loge2's tagged SendInput path, so they still work while
 block_user_input is active.
 
 Blocking tools are enabled only when PYFIND_MCP_ALLOW_INPUT_GATE=true as well.
-By default a block persists until unblock_user_input is called, the physical
-emergency hotkey is pressed (Ctrl+Alt+Shift+F12 unless configured otherwise),
-or the MCP server exits. An optional ttl can release it automatically. Always
-release the gate when a test finishes.
+For an injected-input task, call begin_input_task before the first input action
+and end_input_task after the last, even if the task failed. The ascending
+task-start cue plays at begin and the descending task-end cue at end. Physical
+input is not blocked while you observe, wait, or think: each input tool closes
+the gate only for the duration of its own injection and plays a short blip.
+Tagged input events still reach the desktop while the gate is closed.
+
+Input is not held between calls, so the foreground window can change while you
+observe or think. Always pass the window_title you inspected to press_key and
+type_text: these tools never change focus on their own, so if that window lost
+focus the server blocks input, forces it back to the foreground, then sends the
+keys. If focus cannot be restored the call fails and nothing is sent. click,
+drag, and scroll accept window_title too, which prevents another window covering
+the mouse target. Use focus_window when you only need to raise a window.
+
+block_user_input is a manual override that holds input blocked across steps; do
+not use it for normal tasks. If you do use it, pass a bounded ttl, confirm the
+state with input_block_status, and call unblock_user_input when the task
+finishes. A block without a ttl otherwise persists until the physical emergency
+hotkey is pressed (Ctrl+Alt+Shift+F12 unless configured otherwise) or the MCP
+server exits, so never leave a task without releasing it.
 """
 
 

@@ -63,6 +63,10 @@ class Settings:
     allow_input_gate: bool = False
     input_gate_hotkey: str = "ctrl+alt+shift+f12"
     input_gate_max_ttl: float = 600.0
+    beep: bool = True
+    image_format: str = "png"
+    webp_quality: int = 90
+    webp_lossless: bool = False
     max_workers: int = 2
     threshold: float = 0.8
     default_timeout: float = 10.0
@@ -80,6 +84,15 @@ def _default_input_gate_hotkey() -> str:
     return hotkey
 
 
+def _default_image_format() -> str:
+    raw = os.getenv("PYFIND_MCP_IMAGE_FORMAT", "png").strip().lower() or "png"
+    if raw not in {"png", "webp"}:
+        raise ValueError(
+            f"PYFIND_MCP_IMAGE_FORMAT must be 'png' or 'webp', got {raw!r}"
+        )
+    return raw
+
+
 def load_settings() -> Settings:
     level = os.getenv("PYFIND_MCP_LOG_LEVEL", "WARNING").strip().upper() or "WARNING"
     if level not in _LOG_LEVELS:
@@ -92,6 +105,10 @@ def load_settings() -> Settings:
         allow_input_gate=_env_bool("PYFIND_MCP_ALLOW_INPUT_GATE", False),
         input_gate_hotkey=_default_input_gate_hotkey(),
         input_gate_max_ttl=_env_float("PYFIND_MCP_INPUT_GATE_MAX_TTL", 600.0, 1.0, 3600.0),
+        beep=_env_bool("PYFIND_MCP_BEEP", True),
+        image_format=_default_image_format(),
+        webp_quality=_env_int("PYFIND_MCP_WEBP_QUALITY", 90, 1, 100),
+        webp_lossless=_env_bool("PYFIND_MCP_WEBP_LOSSLESS", False),
         max_workers=_env_int("PYFIND_MCP_MAX_WORKERS", 2, 1, 32),
         threshold=_env_float("PYFIND_MCP_THRESHOLD", 0.8, 0.0, 1.0),
         default_timeout=_env_float("PYFIND_MCP_DEFAULT_TIMEOUT", 10.0, 0.0, 3600.0),

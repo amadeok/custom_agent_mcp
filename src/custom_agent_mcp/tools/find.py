@@ -68,11 +68,11 @@ def register_find_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Settin
         all_matches: bool = True,
         max_results: int = 50,
     ) -> dict[str, Any]:
-        """Locate PNG templates on screen using PyFind's template matching.
+        """Locate PNG or WebP templates on screen using PyFind's template matching.
 
         Templates may be names from the templates directory (with or without
-        .png) or absolute PNG paths. With timeout > 0, waits for a match.
-        Set disappear=true to wait for the matches to disappear.
+        .png/.webp) or absolute PNG/WebP paths. With timeout > 0, waits for a
+        match. Set disappear=true to wait for the matches to disappear.
         """
         if len(templates) > 50:
             raise ValueError("templates supports at most 50 entries per call")
@@ -98,11 +98,11 @@ def register_find_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Settin
     @mcp.tool(annotations=READ_ONLY)
     @tool_errors
     def list_templates() -> dict[str, Any]:
-        """List PNG templates available in the configured templates directory."""
+        """List PNG and WebP templates in the configured templates directory."""
         return runtime.list_templates()
 
     @mcp.tool(annotations=READ_ONLY)
     @tool_errors
     def reload_templates() -> dict[str, Any]:
-        """Clear the template cache and reload PNG templates from disk."""
+        """Clear the template cache and reload PNG and WebP templates from disk."""
         return runtime.reload_templates()

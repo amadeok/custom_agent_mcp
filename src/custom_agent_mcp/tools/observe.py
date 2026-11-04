@@ -38,8 +38,9 @@ def register_observe_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Set
     ) -> list[TextContent | Image]:
         """Capture the screen, a monitor, a window, or an absolute region.
 
-        Saves a full-resolution PNG and returns a preview image plus metadata
-        containing the full path. Use at most one of window_title, monitor, or region.
+        Saves a full-resolution image (PNG or WebP) and returns a preview image
+        plus metadata containing the full path. Use at most one of window_title,
+        monitor, or region.
         """
         rect, target = runtime.resolve_target(
             window_title=window_title,

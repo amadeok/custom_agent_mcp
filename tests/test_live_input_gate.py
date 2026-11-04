@@ -32,6 +32,7 @@ def _settings(tmp_path, **overrides) -> Settings:
         "allow_input": True,
         "allow_input_gate": True,
         "input_gate_hotkey": "ctrl+alt+shift+f12",
+        "beep": False,
     }
     values.update(overrides)
     return Settings(**values)
@@ -108,6 +109,24 @@ def test_runtime_move_tools_work_while_mouse_is_blocked(tmp_path):
         assert _near(runtime.cursor_position(), (target[0] + 20, target[1] + 10))
     finally:
         runtime.unblock_user_input()
+        runtime.close()
+
+
+def test_task_mode_blocks_only_during_injection(tmp_path):
+    runtime = PyFindRuntime(_settings(tmp_path))
+    runtime.begin_input_task()
+    try:
+        status = runtime.input_block_status()
+        assert status["task_active"] is True
+        assert status["any_blocked"] is False
+
+        runtime.move_mouse(100, 100)
+
+        status = runtime.input_block_status()
+        assert status["task_active"] is True
+        assert status["any_blocked"] is False
+    finally:
+        runtime.end_input_task()
         runtime.close()
 
 

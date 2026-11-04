@@ -11,6 +11,10 @@ def test_load_settings_defaults(monkeypatch):
         "PYFIND_MCP_ALLOW_INPUT_GATE",
         "PYFIND_MCP_INPUT_GATE_HOTKEY",
         "PYFIND_MCP_INPUT_GATE_MAX_TTL",
+        "PYFIND_MCP_BEEP",
+        "PYFIND_MCP_IMAGE_FORMAT",
+        "PYFIND_MCP_WEBP_QUALITY",
+        "PYFIND_MCP_WEBP_LOSSLESS",
         "PYFIND_MCP_MAX_WORKERS",
         "PYFIND_MCP_THRESHOLD",
         "PYFIND_MCP_LOG_LEVEL",
@@ -23,6 +27,10 @@ def test_load_settings_defaults(monkeypatch):
     assert settings.allow_input_gate is False
     assert settings.input_gate_hotkey == "ctrl+alt+shift+f12"
     assert settings.input_gate_max_ttl == 600.0
+    assert settings.beep is True
+    assert settings.image_format == "png"
+    assert settings.webp_quality == 90
+    assert settings.webp_lossless is False
     assert settings.max_workers == 2
     assert settings.threshold == 0.8
     assert settings.log_level == "WARNING"
@@ -35,6 +43,10 @@ def test_load_settings_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("PYFIND_MCP_ALLOW_INPUT_GATE", "true")
     monkeypatch.setenv("PYFIND_MCP_INPUT_GATE_HOTKEY", "none")
     monkeypatch.setenv("PYFIND_MCP_INPUT_GATE_MAX_TTL", "120")
+    monkeypatch.setenv("PYFIND_MCP_BEEP", "false")
+    monkeypatch.setenv("PYFIND_MCP_IMAGE_FORMAT", "webp")
+    monkeypatch.setenv("PYFIND_MCP_WEBP_QUALITY", "80")
+    monkeypatch.setenv("PYFIND_MCP_WEBP_LOSSLESS", "true")
     monkeypatch.setenv("PYFIND_MCP_MAX_WORKERS", "4")
     monkeypatch.setenv("PYFIND_MCP_THRESHOLD", "0.65")
     monkeypatch.setenv("PYFIND_MCP_LOG_LEVEL", "debug")
@@ -47,6 +59,10 @@ def test_load_settings_overrides(monkeypatch, tmp_path):
     assert settings.allow_input_gate is True
     assert settings.input_gate_hotkey == ""
     assert settings.input_gate_max_ttl == 120.0
+    assert settings.beep is False
+    assert settings.image_format == "webp"
+    assert settings.webp_quality == 80
+    assert settings.webp_lossless is True
     assert settings.max_workers == 4
     assert settings.threshold == 0.65
     assert settings.log_level == "DEBUG"

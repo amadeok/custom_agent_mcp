@@ -42,6 +42,8 @@ def test_observation_tools_registered(tmp_path):
     assert "move_mouse" not in names
     assert "block_user_input" not in names
     assert "unblock_user_input" not in names
+    assert "begin_input_task" not in names
+    assert "end_input_task" not in names
 
 
 def test_input_tools_registered_when_enabled(tmp_path):
@@ -61,8 +63,11 @@ def test_input_tools_registered_when_enabled(tmp_path):
     assert "move_mouse_by" in names
     assert "drag" in names
     assert "cursor_position" in names
+    assert "focus_window" in names
     assert "block_user_input" not in names
     assert "unblock_user_input" not in names
+    assert "begin_input_task" not in names
+    assert "end_input_task" not in names
 
 
 def test_gate_tools_registered_when_enabled(tmp_path):
@@ -77,6 +82,8 @@ def test_gate_tools_registered_when_enabled(tmp_path):
 
     assert "block_user_input" in names
     assert "unblock_user_input" in names
+    assert "begin_input_task" in names
+    assert "end_input_task" in names
     assert "input_block_status" in names
 
 

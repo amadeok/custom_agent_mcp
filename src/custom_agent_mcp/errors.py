@@ -5,7 +5,7 @@ from typing import Callable, ParamSpec, TypeVar
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from .runtime import PyFindRuntimeError
+from .exceptions import PyFindRuntimeError
 
 P = ParamSpec("P")
 R = TypeVar("R")

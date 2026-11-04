@@ -60,6 +60,9 @@ class Settings:
     templates_dir: Path
     output_dir: Path
     allow_input: bool = False
+    allow_input_gate: bool = False
+    input_gate_hotkey: str = "ctrl+alt+shift+f12"
+    input_gate_max_ttl: float = 600.0
     max_workers: int = 2
     threshold: float = 0.8
     default_timeout: float = 10.0
@@ -67,6 +70,14 @@ class Settings:
     preview_max_width: int = 1600
     max_output_files: int = 100
     log_level: str = "WARNING"
+
+
+def _default_input_gate_hotkey() -> str:
+    raw = os.getenv("PYFIND_MCP_INPUT_GATE_HOTKEY", "ctrl+alt+shift+f12")
+    hotkey = raw.strip().lower()
+    if hotkey in {"", "none", "off", "disabled"}:
+        return ""
+    return hotkey
 
 
 def load_settings() -> Settings:
@@ -78,6 +89,9 @@ def load_settings() -> Settings:
         templates_dir=_default_templates_dir(),
         output_dir=_default_output_dir(),
         allow_input=_env_bool("PYFIND_MCP_ALLOW_INPUT", False),
+        allow_input_gate=_env_bool("PYFIND_MCP_ALLOW_INPUT_GATE", False),
+        input_gate_hotkey=_default_input_gate_hotkey(),
+        input_gate_max_ttl=_env_float("PYFIND_MCP_INPUT_GATE_MAX_TTL", 600.0, 1.0, 3600.0),
         max_workers=_env_int("PYFIND_MCP_MAX_WORKERS", 2, 1, 32),
         threshold=_env_float("PYFIND_MCP_THRESHOLD", 0.8, 0.0, 1.0),
         default_timeout=_env_float("PYFIND_MCP_DEFAULT_TIMEOUT", 10.0, 0.0, 3600.0),

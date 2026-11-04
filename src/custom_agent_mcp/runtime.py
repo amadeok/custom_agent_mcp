@@ -10,24 +10,26 @@ from typing import Any, Sequence
 
 from loguru import logger
 
+from .exceptions import (
+    InputDisabledError,
+    Loge2NotInstalledError,
+    PyFindRuntimeError,
+    TemplateNotFoundError,
+    WindowNotFoundError,
+)
+from .input_gate import InputGate
+from .loge2_support import import_inject
 from .models import Rect, serialize_templates
 from .settings import Settings
 
-
-class PyFindRuntimeError(RuntimeError):
-    pass
-
-
-class WindowNotFoundError(PyFindRuntimeError):
-    pass
-
-
-class TemplateNotFoundError(PyFindRuntimeError):
-    pass
-
-
-class InputDisabledError(PyFindRuntimeError):
-    pass
+__all__ = [
+    "InputDisabledError",
+    "Loge2NotInstalledError",
+    "PyFindRuntime",
+    "PyFindRuntimeError",
+    "TemplateNotFoundError",
+    "WindowNotFoundError",
+]
 
 
 def _require_windows() -> None:
@@ -45,11 +47,28 @@ def _to_pyfind_rect(rect: dict[str, int]) -> dict[str, int]:
     }
 
 
+def _cursor_position() -> dict[str, int]:
+    _require_windows()
+    import ctypes
+    from ctypes import wintypes
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    point = POINT()
+    if not user32.GetCursorPos(ctypes.byref(point)):
+        error = ctypes.get_last_error()
+        raise PyFindRuntimeError(f"GetCursorPos failed (WinError {error}).")
+    return {"x": int(point.x), "y": int(point.y)}
+
+
 class PyFindRuntime:
     """Owns the single long-lived PyFinder instance and all PyFind calls."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.input_gate = InputGate(settings)
         self._lock = threading.RLock()
         self._finder: Any | None = None
         self._template_cache: dict[str, Any] = {}
@@ -118,6 +137,10 @@ class PyFindRuntime:
         return self._finder
 
     def close(self) -> None:
+        try:
+            self.input_gate.close()
+        except Exception:
+            logger.exception("Error while closing the input gate")
         with self._lock:
             if self._closed:
                 return
@@ -687,19 +710,33 @@ class PyFindRuntime:
     # ------------------------------------------------------------------
     # mouse / keyboard
     # ------------------------------------------------------------------
+    _CLICK_BUTTONS = frozenset(
+        {"left", "right", "middle", "x1", "x2", "back", "forward", "move"}
+    )
+    _DRAG_BUTTONS = frozenset({"left", "right", "middle", "x1", "x2", "back", "forward"})
+    _WHEEL_UNIT = 120
+
     def _require_input(self) -> None:
         if not self.settings.allow_input:
             raise InputDisabledError(
                 "Input tools are disabled. Set PYFIND_MCP_ALLOW_INPUT=true and restart the MCP server."
             )
 
+    def _inject(self) -> Any:
+        self._require_input()
+        return import_inject()
+
     @staticmethod
-    def _pyautogui() -> Any:
-        try:
-            import pyautogui
-        except ImportError as exc:
-            raise PyFindRuntimeError("The 'pyautogui' package is required for input tools.") from exc
-        return pyautogui
+    def _validate_modifiers(modifiers: Sequence[str] | None) -> list[str]:
+        if not modifiers:
+            return []
+        cleaned = []
+        for modifier in modifiers:
+            name = str(modifier).strip().lower()
+            if not name:
+                raise ValueError("modifiers must not contain empty strings")
+            cleaned.append(name)
+        return cleaned
 
     def _validate_point(self, x: int, y: int) -> None:
         virtual = self.virtual_screen()
@@ -707,6 +744,14 @@ class PyFindRuntime:
             raise ValueError(f"x={x} is outside the virtual desktop ({virtual['x']}..{virtual['x'] + virtual['width'] - 1})")
         if not (virtual["y"] <= y < virtual["y"] + virtual["height"]):
             raise ValueError(f"y={y} is outside the virtual desktop ({virtual['y']}..{virtual['y'] + virtual['height'] - 1})")
+
+    @staticmethod
+    def _release_modifiers(inject: Any, pressed: Sequence[str]) -> None:
+        for modifier in reversed(pressed):
+            try:
+                inject.key_up(modifier)
+            except Exception:
+                logger.exception("Could not release modifier {!r}", modifier)
 
     def click(
         self,
@@ -716,25 +761,119 @@ class PyFindRuntime:
         button: str = "left",
         clicks: int = 1,
         interval: float = 0.0,
+        modifiers: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         self._require_input()
-        if button not in {"left", "right", "middle", "move"}:
-            raise ValueError("button must be one of left, right, middle, move")
+        if button not in self._CLICK_BUTTONS:
+            raise ValueError(
+                "button must be one of " + ", ".join(sorted(self._CLICK_BUTTONS))
+            )
         if not 1 <= clicks <= 5:
             raise ValueError("clicks must be between 1 and 5")
         if not 0.0 <= interval <= 5.0:
             raise ValueError("interval must be between 0 and 5 seconds")
         self._validate_point(x, y)
-        pyautogui = self._pyautogui()
+
+        inject = self._inject()
+        mods = self._validate_modifiers(modifiers)
+        pressed: list[str] = []
         try:
-            pyautogui.moveTo(x, y)
-            if button != "move":
-                pyautogui.click(x=x, y=y, clicks=clicks, interval=interval, button=button)
-        except pyautogui.FailSafeException as exc:
-            raise PyFindRuntimeError(
-                "PyAutoGUI's top-left failsafe was triggered. Move the pointer away from the top-left corner."
-            ) from exc
-        return {"ok": True, "x": x, "y": y, "button": button, "clicks": clicks}
+            for modifier in mods:
+                inject.key_down(modifier)
+                pressed.append(modifier)
+            if button == "move":
+                inject.mouse_move_to(x, y)
+            else:
+                inject.mouse_click_at(
+                    x,
+                    y,
+                    button=button,
+                    count=clicks,
+                    interval=interval,
+                )
+        finally:
+            self._release_modifiers(inject, pressed)
+        return {
+            "ok": True,
+            "x": x,
+            "y": y,
+            "button": button,
+            "clicks": clicks,
+            "modifiers": mods,
+        }
+
+    def move_mouse(self, x: int, y: int) -> dict[str, Any]:
+        self._require_input()
+        self._validate_point(x, y)
+        inject = self._inject()
+        inject.mouse_move_to(x, y)
+        return {"ok": True, "x": x, "y": y}
+
+    def move_mouse_by(self, dx: int, dy: int) -> dict[str, Any]:
+        self._require_input()
+        position = _cursor_position()
+        x = position["x"] + int(dx)
+        y = position["y"] + int(dy)
+        self._validate_point(x, y)
+        inject = self._inject()
+        inject.mouse_move_to(x, y)
+        return {"ok": True, "dx": dx, "dy": dy, "x": x, "y": y}
+
+    def drag(
+        self,
+        from_x: int,
+        from_y: int,
+        to_x: int,
+        to_y: int,
+        *,
+        button: str = "left",
+        duration: float = 0.2,
+        modifiers: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        self._require_input()
+        if button not in self._DRAG_BUTTONS:
+            raise ValueError(
+                "button must be one of " + ", ".join(sorted(self._DRAG_BUTTONS))
+            )
+        if not 0.0 <= duration <= 10.0:
+            raise ValueError("duration must be between 0 and 10 seconds")
+        self._validate_point(from_x, from_y)
+        self._validate_point(to_x, to_y)
+
+        inject = self._inject()
+        mods = self._validate_modifiers(modifiers)
+        pressed: list[str] = []
+        try:
+            for modifier in mods:
+                inject.key_down(modifier)
+                pressed.append(modifier)
+            inject.mouse_move_to(from_x, from_y)
+            inject.mouse_down(button)
+            try:
+                if duration <= 0:
+                    inject.mouse_move_to(to_x, to_y)
+                else:
+                    steps = max(1, min(200, int(round(duration / 0.02))))
+                    for step in range(1, steps + 1):
+                        x = round(from_x + (to_x - from_x) * step / steps)
+                        y = round(from_y + (to_y - from_y) * step / steps)
+                        inject.mouse_move_to(x, y)
+                        time.sleep(duration / steps)
+            finally:
+                try:
+                    inject.mouse_up(button)
+                except Exception:
+                    logger.exception("Could not release mouse button {!r} after drag", button)
+        finally:
+            self._release_modifiers(inject, pressed)
+        return {
+            "ok": True,
+            "from": {"x": from_x, "y": from_y},
+            "to": {"x": to_x, "y": to_y},
+            "button": button,
+            "duration": duration,
+            "modifiers": mods,
+        }
 
     def type_text(self, text: str, *, interval: float = 0.0) -> dict[str, Any]:
         self._require_input()
@@ -742,23 +881,37 @@ class PyFindRuntime:
             raise ValueError("text must not be empty")
         if not 0.0 <= interval <= 5.0:
             raise ValueError("interval must be between 0 and 5 seconds")
-        pyautogui = self._pyautogui()
-        pyautogui.write(text, interval=interval)
+        inject = self._inject()
+        if interval <= 0:
+            inject.type_text(text)
+        else:
+            for character in text:
+                inject.type_text(character)
+                time.sleep(interval)
         return {"ok": True, "characters": len(text)}
 
-    def press_key(self, key: str) -> dict[str, Any]:
+    def press_key(self, key: str, *, hold: float = 0.02) -> dict[str, Any]:
         self._require_input()
         parts = [part.strip() for part in key.split("+") if part.strip()]
         if not parts:
             raise ValueError("key must not be empty")
-        pyautogui = self._pyautogui()
+        if not 0.0 <= hold <= 5.0:
+            raise ValueError("hold must be between 0 and 5 seconds")
+        inject = self._inject()
         if len(parts) > 1:
-            pyautogui.hotkey(*parts)
+            inject.combo(parts, hold=hold)
         else:
-            pyautogui.press(parts[0])
-        return {"ok": True, "keys": parts}
+            inject.tap(parts[0], hold=hold)
+        return {"ok": True, "keys": parts, "hold": hold}
 
-    def scroll(self, clicks: int, *, x: int | None = None, y: int | None = None) -> dict[str, Any]:
+    def scroll(
+        self,
+        clicks: int,
+        *,
+        x: int | None = None,
+        y: int | None = None,
+        horizontal: bool = False,
+    ) -> dict[str, Any]:
         self._require_input()
         if clicks == 0:
             raise ValueError("clicks must not be zero")
@@ -766,8 +919,45 @@ class PyFindRuntime:
             raise ValueError("provide both x and y, or neither")
         if x is not None and y is not None:
             self._validate_point(x, y)
-        pyautogui = self._pyautogui()
+        inject = self._inject()
         if x is not None and y is not None:
-            pyautogui.moveTo(x, y)
-        pyautogui.scroll(clicks)
-        return {"ok": True, "clicks": clicks, "x": x, "y": y}
+            inject.mouse_move_to(x, y)
+        delta = int(clicks) * self._WHEEL_UNIT
+        inject.mouse_scroll(delta, horizontal=horizontal)
+        return {
+            "ok": True,
+            "clicks": clicks,
+            "delta": delta,
+            "horizontal": horizontal,
+            "x": x,
+            "y": y,
+        }
+
+    def cursor_position(self) -> dict[str, Any]:
+        self._require_input()
+        return {**_cursor_position(), "ok": True}
+
+    # ------------------------------------------------------------------
+    # physical input gate
+    # ------------------------------------------------------------------
+    def block_user_input(
+        self,
+        *,
+        keyboard: bool = True,
+        mouse: bool = True,
+        ttl: float | None = None,
+    ) -> dict[str, Any]:
+        self._require_input()
+        return self.input_gate.arm(keyboard=keyboard, mouse=mouse, ttl=ttl)
+
+    def unblock_user_input(
+        self,
+        *,
+        keyboard: bool = True,
+        mouse: bool = True,
+    ) -> dict[str, Any]:
+        # Release must never be hidden behind allow_input: it is the safety path.
+        return self.input_gate.release(keyboard=keyboard, mouse=mouse, reason="manual")
+
+    def input_block_status(self) -> dict[str, Any]:
+        return self.input_gate.status()

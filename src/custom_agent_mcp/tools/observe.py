@@ -74,6 +74,13 @@ def register_observe_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Set
 
         Returns the recognized text plus line rectangles in absolute screen
         coordinates. Set include_words=true for per-word boxes.
+
+        If your model has native vision, prefer reading a screenshot with it
+        instead of calling this tool: vision preserves layout, icons, and
+        styling and usually reads text more reliably. This tool uses Windows
+        OCR (not PaddleOCR), so its text and line/word boxes can be imperfect.
+        Use it mainly when the model cannot see images, or when plain text
+        output is enough and an image would be overkill.
         """
         if not 1 <= max_lines <= 2000:
             raise ValueError("max_lines must be between 1 and 2000")

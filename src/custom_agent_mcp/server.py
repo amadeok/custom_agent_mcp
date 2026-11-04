@@ -10,6 +10,7 @@ from . import __version__
 from .runtime import PyFindRuntime
 from .settings import Settings, load_settings
 from .tools.find import register_find_tools
+from .tools.gate import register_gate_tools
 from .tools.input import register_input_tools
 from .tools.observe import register_observe_tools
 
@@ -40,14 +41,31 @@ screenshot writes a full-resolution PNG and returns a downscaled preview plus
 the full path. Templates for find_image are PNG names from the configured
 templates directory, or absolute PNG paths.
 
+If your model has native vision, prefer reading a screenshot with your own
+vision over the ocr tool: vision keeps layout, icons, and styling, and usually
+reads text more reliably. This server uses Windows OCR (not PaddleOCR), so its
+text and line/word boxes can be imperfect. Use ocr mainly when the model cannot
+see images, or when plain text output is enough and an image would be overkill.
+
 MSS captures only visible desktop content. Minimized or fully occluded windows
-cannot be read. Input tools (click, type_text, press_key, scroll) are available
-only when PYFIND_MCP_ALLOW_INPUT=true.
+cannot be read. Input tools are available only when PYFIND_MCP_ALLOW_INPUT=true.
+They inject through loge2's tagged SendInput path, so they still work while
+block_user_input is active.
+
+Blocking tools are enabled only when PYFIND_MCP_ALLOW_INPUT_GATE=true as well.
+By default a block persists until unblock_user_input is called, the physical
+emergency hotkey is pressed (Ctrl+Alt+Shift+F12 unless configured otherwise),
+or the MCP server exits. An optional ttl can release it automatically. Always
+release the gate when a test finishes.
 """
 
 
 def create_server(settings: Settings | None = None) -> MCPServer:
     settings = settings or load_settings()
+    if settings.allow_input_gate and not settings.allow_input:
+        raise ValueError(
+            "PYFIND_MCP_ALLOW_INPUT_GATE=true requires PYFIND_MCP_ALLOW_INPUT=true."
+        )
 
     logger.remove()
     logger.add(sys.stderr, level=settings.log_level, backtrace=False, diagnose=False)
@@ -57,7 +75,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         "pyfind",
         title="PyFind",
         version=__version__,
-        description="Windows screen capture, OCR, template matching, and optional GUI input.",
+        description="Windows screen capture, OCR, template matching, and optional GUI input blocking/injection.",
         instructions=INSTRUCTIONS,
         log_level=settings.log_level,
     )
@@ -66,6 +84,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     register_find_tools(server, runtime, settings)
     if settings.allow_input:
         register_input_tools(server, runtime, settings)
+        if settings.allow_input_gate:
+            register_gate_tools(server, runtime, settings)
 
     # Keep a reference for tests and diagnostics; tools already close over it.
     server._pyfind_runtime = runtime  # type: ignore[attr-defined]

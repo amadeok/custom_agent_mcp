@@ -16,6 +16,7 @@ def test_stdio_server_lists_tools(tmp_path):
             "PYFIND_MCP_TEMPLATES_DIR": str(tmp_path / "templates"),
             "PYFIND_MCP_OUTPUT_DIR": str(tmp_path / "out"),
             "PYFIND_MCP_ALLOW_INPUT": "false",
+            "PYFIND_MCP_ALLOW_INPUT_GATE": "false",
             "PYFIND_MCP_LOG_LEVEL": "ERROR",
         }
     )
@@ -37,3 +38,4 @@ def test_stdio_server_lists_tools(tmp_path):
     assert "ocr" in names
     assert "find_image" in names
     assert "click" not in names
+    assert "block_user_input" not in names

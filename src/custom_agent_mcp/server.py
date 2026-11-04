@@ -62,9 +62,21 @@ begin_input_task takes mode="injection" (default) or mode="task". In injection
 mode physical input is not blocked while you observe, wait, or think: each input
 tool closes the gate only for the duration of its own injection and plays a
 short blip. In task mode keyboard and mouse stay blocked from task start until
-end_input_task, the emergency hotkey, or shutdown; choose it when a human must
-not interfere for the whole task. Tagged input events still reach the desktop
-while the gate is closed.
+end_input_task, the emergency hotkey, or shutdown. Tagged input events still
+reach the desktop while the gate is closed.
+
+Choose the mode deliberately:
+- Use injection (the default) for ordinary GUI automation. The human keeps
+  working between steps and every injection is still protected.
+- Use task only when the user asks for input to be blocked for the whole task,
+  or when the workflow cannot tolerate human input at all: a continuous drag or
+  held key, rapid multi-step entry with no safe pause, or an unattended run.
+- If neither applies, use injection. When in doubt, ask the user or use
+  injection; do not silently lock them out.
+- Mode is fixed for the duration of a task. To switch, call end_input_task,
+  then begin_input_task again with the other mode. The task_mode field in the
+  result is the mode actually in force; input_block_status reports both the
+  configured default (mode) and the active one (task_mode).
 
 Input is not held between calls, so the foreground window can change while you
 observe or think. Always pass the window_title you inspected to press_key and

@@ -45,9 +45,12 @@ def register_gate_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Settin
         agent observes, waits, or thinks: each input tool blocks only for its
         own injection and plays a short blip. mode="task" blocks keyboard and
         mouse immediately and holds them until end_input_task, the emergency
-        hotkey, or server shutdown; use it when a human must not interfere for
-        the whole task. The mode defaults to PYFIND_MCP_INPUT_GATE_MODE. Call
-        end_input_task after the last action, even if the task failed.
+        hotkey, or server shutdown; use it only when the user asks for a full
+        lockout or the workflow cannot tolerate human input. When unsure, use
+        injection. The mode defaults to PYFIND_MCP_INPUT_GATE_MODE; the result's
+        task_mode is what is actually in force. A mode change requires
+        end_input_task first. Call end_input_task after the last action, even if
+        the task failed.
         """
         return runtime.begin_input_task(mode=mode)
 

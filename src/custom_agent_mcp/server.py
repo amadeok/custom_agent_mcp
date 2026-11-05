@@ -9,6 +9,7 @@ from mcp.server import MCPServer
 from . import __version__
 from .runtime import PyFindRuntime
 from .settings import Settings, load_settings
+from .tools.batch import register_batch_tools
 from .tools.find import register_find_tools
 from .tools.gate import register_gate_tools
 from .tools.input import register_input_tools
@@ -56,27 +57,38 @@ block_user_input is active.
 Blocking tools are enabled only when PYFIND_MCP_ALLOW_INPUT_GATE=true as well.
 For an injected-input task, call begin_input_task before the first input action
 and end_input_task after the last, even if the task failed. The ascending
-task-start cue plays at begin and the descending task-end cue at end.
+task-start cue plays at begin and the descending task-end cue at end. Physical
+input stays available between calls: each input tool blocks both keyboard and
+mouse only for the duration of its own injection and plays a short blip. To
+hold input blocked continuously, use block_user_input with a bounded ttl.
 
-begin_input_task takes mode="injection" (default) or mode="task". In injection
-mode physical input is not blocked while you observe, wait, or think: each input
-tool closes the gate only for the duration of its own injection, blocks both
-keyboard and mouse, and plays a short blip. In task mode keyboard and mouse stay
-blocked from task start until end_input_task, the emergency hotkey, or shutdown.
-Tagged input events still reach the desktop while the gate is closed.
+Queue dependent input in ONE run_commands call. The tool takes a JSON list of
+{"name": ..., "args": [...]} entries and runs them in order on the server, so
+it does not need Code Mode or an execute batch. Arguments are positional, in
+the named tool's parameter order. For example, replace a selection with
+commands [{"name": "press_key", "args": ["ctrl+a"]}, {"name": "sleep",
+"args": [0.1]}, {"name": "type_text", "args": ["replacement"]}]. The built-in
+sleep command pauses the queue; in a focused queue it holds the input block,
+so keep it short. A focused queue follows the strict focus sequence:
+it blocks input, captures the window that currently has focus, brings the
+target to the front, runs every command, restores the captured window, and
+only then releases input. Queued input calls therefore skip their own focus
+take/restore and a selection is not deactivated between commands; the human
+gets their previous window back after the queue. Pass window_title to choose
+the target, or let it come from the first focus command that supplies one.
+settle delays the final restore. A focused queue holds input for its whole
+duration, so keep waits short. The whole queue is validated before anything
+runs, so a typo has no side effects. A failed command stops the queue unless
+continue_on_error=true; inspect ok, failed, stopped_early, and results. If a
+queue blocks input, put unblock_user_input last and continue_on_error=true so
+a failure cannot strand the block.
 
-Choose the mode deliberately:
-- Use injection (the default) for ordinary GUI automation. The human keeps
-  working between steps and every injection is still protected.
-- Use task only when the user asks for input to be blocked for the whole task,
-  or when the workflow cannot tolerate human input at all: a continuous drag or
-  held key, rapid multi-step entry with no safe pause, or an unattended run.
-- If neither applies, use injection. When in doubt, ask the user or use
-  injection; do not silently lock them out.
-- Mode is fixed for the duration of a task. To switch, call end_input_task,
-  then begin_input_task again with the other mode. The task_mode field in the
-  result is the mode actually in force; input_block_status reports both the
-  configured default (mode) and the active one (task_mode).
+Do not split a dependent sequence across separate tool calls: focus is
+restored after every standalone injection, so a selection, caret, or transient
+menu can be lost. If a step needs visual inspection, end the queue, inspect
+the result, and start the next one. Inside a queue, use find_text or find_image
+with timeout to wait for UI state instead of sleeping. Never run input tools
+concurrently; their order and focus are stateful.
 
 Input is not held between calls, so the foreground window can change while you
 observe or think. Always pass the window_title you inspected to press_key and
@@ -88,6 +100,15 @@ fails, so focus is never silently left on the wrong window. click, drag, and
 scroll accept window_title too: they focus the target for the injection, which
 prevents another window covering the mouse target, and then restore the previous
 focus. Use focus_window when you deliberately want to leave a window in front.
+
+type_text sends one character per SendInput with a short pause (0.03 s by
+default) because Chrome and other Chromium targets drop characters from a single
+large batch. When press_key or type_text had to take focus, it also keeps the
+gate closed for settle seconds (0.2 s by default) before restoring focus, so the
+target can process the last event. Raise settle for slow or heavily loaded apps.
+For a browser address bar, ctrl+l followed by type_text is usually enough; a
+ctrl+a press before typing is a cheap fallback if the URL is appended instead of
+replaced.
 
 click, drag, and scroll return the pointer to where it was before the call, so
 the human's cursor is not left somewhere random. This happens inside the same
@@ -124,12 +145,14 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         log_level=settings.log_level,
     )
 
-    register_observe_tools(server, runtime, settings)
-    register_find_tools(server, runtime, settings)
+    handlers = {}
+    handlers.update(register_observe_tools(server, runtime, settings))
+    handlers.update(register_find_tools(server, runtime, settings))
     if settings.allow_input:
-        register_input_tools(server, runtime, settings)
+        handlers.update(register_input_tools(server, runtime, settings))
         if settings.allow_input_gate:
-            register_gate_tools(server, runtime, settings)
+            handlers.update(register_gate_tools(server, runtime, settings))
+    register_batch_tools(server, runtime, settings, handlers)
 
     # Keep a reference for tests and diagnostics; tools already close over it.
     server._pyfind_runtime = runtime  # type: ignore[attr-defined]

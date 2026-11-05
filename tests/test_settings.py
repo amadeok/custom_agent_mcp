@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from custom_agent_mcp.settings import load_settings
 
 
@@ -12,7 +10,6 @@ def test_load_settings_defaults(monkeypatch):
         "PYFIND_MCP_ALLOW_INPUT",
         "PYFIND_MCP_ALLOW_INPUT_GATE",
         "PYFIND_MCP_INPUT_GATE_HOTKEY",
-        "PYFIND_MCP_INPUT_GATE_MODE",
         "PYFIND_MCP_INPUT_GATE_MAX_TTL",
         "PYFIND_MCP_BEEP",
         "PYFIND_MCP_IMAGE_FORMAT",
@@ -29,7 +26,7 @@ def test_load_settings_defaults(monkeypatch):
     assert settings.allow_input is False
     assert settings.allow_input_gate is False
     assert settings.input_gate_hotkey == "ctrl+alt+shift+f12"
-    assert settings.input_gate_mode == "injection"
+    assert not hasattr(settings, "input_gate_mode")
     assert settings.input_gate_max_ttl == 600.0
     assert settings.beep is True
     assert settings.image_format == "png"
@@ -46,7 +43,6 @@ def test_load_settings_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("PYFIND_MCP_ALLOW_INPUT", "true")
     monkeypatch.setenv("PYFIND_MCP_ALLOW_INPUT_GATE", "true")
     monkeypatch.setenv("PYFIND_MCP_INPUT_GATE_HOTKEY", "none")
-    monkeypatch.setenv("PYFIND_MCP_INPUT_GATE_MODE", "task")
     monkeypatch.setenv("PYFIND_MCP_INPUT_GATE_MAX_TTL", "120")
     monkeypatch.setenv("PYFIND_MCP_BEEP", "false")
     monkeypatch.setenv("PYFIND_MCP_IMAGE_FORMAT", "webp")
@@ -63,7 +59,6 @@ def test_load_settings_overrides(monkeypatch, tmp_path):
     assert settings.allow_input is True
     assert settings.allow_input_gate is True
     assert settings.input_gate_hotkey == ""
-    assert settings.input_gate_mode == "task"
     assert settings.input_gate_max_ttl == 120.0
     assert settings.beep is False
     assert settings.image_format == "webp"
@@ -74,8 +69,9 @@ def test_load_settings_overrides(monkeypatch, tmp_path):
     assert settings.log_level == "DEBUG"
 
 
-def test_invalid_gate_mode_rejected(monkeypatch):
+def test_removed_gate_mode_env_is_ignored(monkeypatch):
     monkeypatch.setenv("PYFIND_MCP_INPUT_GATE_MODE", "always")
 
-    with pytest.raises(ValueError, match="PYFIND_MCP_INPUT_GATE_MODE"):
-        load_settings()
+    settings = load_settings()
+
+    assert not hasattr(settings, "input_gate_mode")

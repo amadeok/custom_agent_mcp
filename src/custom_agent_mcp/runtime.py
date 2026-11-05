@@ -38,6 +38,16 @@ __all__ = [
 
 _TEMPLATE_SUFFIXES = (".png", ".webp")
 
+# Chrome and other Chromium targets drop characters when a whole string is
+# inserted in one SendInput call. Send one codepoint at a time and leave a
+# short gap between them by default.
+DEFAULT_TYPE_INTERVAL = 0.03
+
+# Give the target time to process the last injected event before focus is
+# restored. Without it, a window that had to be refocused can lose a shortcut
+# such as ctrl+l before the omnibox has handled it.
+DEFAULT_INJECTION_SETTLE = 0.2
+
 
 def _require_windows() -> None:
     if sys.platform != "win32":
@@ -798,6 +808,7 @@ class PyFindRuntime:
         self,
         *,
         window_title: str | None,
+        settle: float = 0.0,
     ) -> Iterator[dict[str, Any]]:
         """Focus the named window, run one gated injection, then restore focus.
 
@@ -806,6 +817,10 @@ class PyFindRuntime:
         cannot be focused, :class:`FocusNotAcquiredError` is raised and nothing
         is injected. If the previous window cannot be focused again afterwards,
         the call raises instead of silently leaving focus stolen.
+
+        When focus had to be taken, ``settle`` delays the restore so the target
+        can process the last event while the gate is still closed. It is
+        skipped when the injection raised or the target already had focus.
         """
         with self._input_lock:
             window: dict[str, Any] | None = None
@@ -861,9 +876,17 @@ class PyFindRuntime:
                         payload["focus_recovered"] = True
 
                 with self._gated_injection():
+                    completed = False
                     try:
                         yield payload
+                        completed = True
                     finally:
+                        # Let the target process the last event before taking
+                        # focus away. The gate is still closed here, so the
+                        # user cannot race the delay or the restore. Skip it
+                        # when the injection raised or focus was not taken.
+                        if settle > 0 and completed and recovered and previous_handle:
+                            time.sleep(settle)
                         # Restore while input is still blocked, so nothing can
                         # steal focus between the injection and the restore.
                         restore_done = True
@@ -884,6 +907,82 @@ class PyFindRuntime:
                         and not focus_support.owns_foreground(previous_handle)
                     ):
                         self._restore_focus(previous_handle, previous_title)
+                finally:
+                    # The gate must open even when focus restoration failed.
+                    if lease is not None:
+                        self.input_gate.end_injection(**lease)
+
+    @contextmanager
+    def focus_sequence(
+        self,
+        window_title: str,
+        *,
+        settle: float = DEFAULT_INJECTION_SETTLE,
+    ) -> Iterator[dict[str, Any]]:
+        """Focus one window for a whole command sequence and restore focus.
+
+        This is the multi-command form of :meth:`_focused_gated_injection`.
+        The gate closes before focus is taken and stays closed until the
+        previous window has focus again, so physical input cannot race the
+        focus change or land in another window during the sequence. Nested
+        injections borrow the same block: their leases report that they newly
+        blocked nothing and therefore do not open the gate early.
+
+        The previous window is restored even when the target already had
+        focus, so a focus change made by a queued command cannot leak out of
+        the sequence.
+        """
+        self._require_input()
+        if not 0.0 <= settle <= 2.0:
+            raise ValueError("settle must be between 0 and 2 seconds")
+
+        with self._input_lock:
+            window = self.find_window(window_title)
+            handle = int(window["handle"])
+            payload: dict[str, Any] = {
+                "window_title": window["title"],
+                "window_handle": handle,
+                "focus_recovered": False,
+                "focus_restored": False,
+                "previous_window_title": None,
+                "previous_window_handle": None,
+            }
+            lease = None
+            previous_handle = 0
+            previous_title: str | None = None
+            completed = False
+            try:
+                if self.settings.allow_input_gate:
+                    lease = self.input_gate.begin_injection(
+                        keyboard=True, mouse=True
+                    )
+                else:
+                    logger.warning(
+                        "Focusing {!r} without the input gate: "
+                        "enable PYFIND_MCP_ALLOW_INPUT_GATE=true to prevent "
+                        "focus races.",
+                        window["title"],
+                    )
+                # Capture only after the gate is closed, so the window recorded
+                # as "previous" is the one the user had before the focus change.
+                previous_handle, previous_title = focus_support.capture_foreground()
+                payload["previous_window_handle"] = previous_handle or None
+                payload["previous_window_title"] = previous_title
+                payload["focus_recovered"] = previous_handle != handle
+                focus_support.ensure_foreground(handle, title=window["title"])
+                yield payload
+                completed = True
+            finally:
+                try:
+                    # Let the target process the last queued event before it
+                    # is deactivated. Skip the delay when the sequence raised.
+                    if settle > 0 and completed:
+                        time.sleep(settle)
+                    # Restore while input is still blocked, so nothing can steal
+                    # focus between the last command and the restore.
+                    if previous_handle:
+                        self._restore_focus(previous_handle, previous_title)
+                        payload["focus_restored"] = True
                 finally:
                     # The gate must open even when focus restoration failed.
                     if lease is not None:
@@ -1119,7 +1218,8 @@ class PyFindRuntime:
         self,
         text: str,
         *,
-        interval: float = 0.0,
+        interval: float = DEFAULT_TYPE_INTERVAL,
+        settle: float = DEFAULT_INJECTION_SETTLE,
         window_title: str | None = None,
     ) -> dict[str, Any]:
         self._require_input()
@@ -1127,21 +1227,33 @@ class PyFindRuntime:
             raise ValueError("text must not be empty")
         if not 0.0 <= interval <= 5.0:
             raise ValueError("interval must be between 0 and 5 seconds")
+        if not 0.0 <= settle <= 2.0:
+            raise ValueError("settle must be between 0 and 2 seconds")
         inject = self._inject()
-        with self._focused_gated_injection(window_title=window_title) as focused:
-            if interval <= 0:
-                inject.type_text(text)
-            else:
-                for character in text:
-                    inject.type_text(character)
+        with self._focused_gated_injection(
+            window_title=window_title, settle=settle
+        ) as focused:
+            # One codepoint per SendInput call, even without a delay: a single
+            # batch is what Chromium drops. Sleep between characters only, not
+            # after the last one.
+            for index, character in enumerate(text):
+                if index and interval > 0:
                     time.sleep(interval)
-        return {"ok": True, "characters": len(text), **focused}
+                inject.type_text(character)
+        return {
+            "ok": True,
+            "characters": len(text),
+            "interval": interval,
+            "settle": settle,
+            **focused,
+        }
 
     def press_key(
         self,
         key: str,
         *,
         hold: float = 0.02,
+        settle: float = DEFAULT_INJECTION_SETTLE,
         window_title: str | None = None,
     ) -> dict[str, Any]:
         self._require_input()
@@ -1150,13 +1262,23 @@ class PyFindRuntime:
             raise ValueError("key must not be empty")
         if not 0.0 <= hold <= 5.0:
             raise ValueError("hold must be between 0 and 5 seconds")
+        if not 0.0 <= settle <= 2.0:
+            raise ValueError("settle must be between 0 and 2 seconds")
         inject = self._inject()
-        with self._focused_gated_injection(window_title=window_title) as focused:
+        with self._focused_gated_injection(
+            window_title=window_title, settle=settle
+        ) as focused:
             if len(parts) > 1:
                 inject.combo(parts, hold=hold)
             else:
                 inject.tap(parts[0], hold=hold)
-        return {"ok": True, "keys": parts, "hold": hold, **focused}
+        return {
+            "ok": True,
+            "keys": parts,
+            "hold": hold,
+            "settle": settle,
+            **focused,
+        }
 
     def scroll(
         self,
@@ -1209,10 +1331,10 @@ class PyFindRuntime:
     # ------------------------------------------------------------------
     # physical input gate
     # ------------------------------------------------------------------
-    def begin_input_task(self, *, mode: str | None = None) -> dict[str, Any]:
+    def begin_input_task(self) -> dict[str, Any]:
         self._require_input()
         with self._input_lock:
-            payload = self.input_gate.begin_task(mode=mode)
+            payload = self.input_gate.begin_task()
             if payload.get("task_started") and self.settings.beep:
                 beep.task_start_cue()
             return payload

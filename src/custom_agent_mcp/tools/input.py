@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 from ..errors import tool_errors
-from ..runtime import PyFindRuntime
+from ..runtime import (
+    DEFAULT_INJECTION_SETTLE,
+    DEFAULT_TYPE_INTERVAL,
+    PyFindRuntime,
+)
 from ..settings import Settings
 
 WRITE = ToolAnnotations(
@@ -31,7 +35,9 @@ CLICK_BUTTON = Literal[
 DRAG_BUTTON = Literal["left", "right", "middle", "x1", "x2", "back", "forward"]
 
 
-def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Settings) -> None:
+def register_input_tools(
+    mcp: MCPServer, runtime: PyFindRuntime, settings: Settings
+) -> dict[str, Callable[..., Any]]:
     @mcp.tool(annotations=WRITE)
     @tool_errors
     def click(
@@ -117,23 +123,39 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
     @tool_errors
     def type_text(
         text: str,
-        interval: float = 0.0,
+        interval: float = DEFAULT_TYPE_INTERVAL,
+        settle: float = DEFAULT_INJECTION_SETTLE,
         window_title: str | None = None,
     ) -> dict[str, Any]:
         """Type arbitrary Unicode text into the focused window.
 
-        Uses loge2's KEYEVENTF_UNICODE injection, so it is independent of the
-        active keyboard layout and still works while input is blocked. Keyboard
-        and mouse are blocked for the injection. This tool only changes focus to
-        reach window_title and always gives the previously focused window its
-        focus back afterwards. Always pass the window_title you inspected: if
-        that window is not in front, the server blocks input and focuses it
-        before typing. If focus cannot be acquired, no text is sent; if focus
-        cannot be restored afterwards, the call fails. Both failures are
-        reported as errors instead of silently typing into the wrong window.
+        Characters are sent one at a time with loge2's KEYEVENTF_UNICODE
+        injection, with a short pause between them (interval, default 0.03 s).
+        This pacing matters for Chrome and other Chromium targets, which drop
+        characters when a whole string is sent as one SendInput batch. The
+        injection is independent of the active keyboard layout and still works
+        while input is blocked.
+
+        Keyboard and mouse are blocked for the injection. Always pass the
+        window_title you inspected: if that window is not in front, the server
+        blocks input and focuses it before typing. When focus had to be taken,
+        settle (default 0.2 s) holds the gate closed a little longer so the
+        target can process the last character before the previous window gets
+        focus back; raise it for heavy applications. If focus cannot be
+        acquired, no text is sent; if focus cannot be restored afterwards, the
+        call fails. Both failures are reported as errors instead of silently
+        typing into the wrong window.
+
+        Queue ctrl+a and the type_text that replaces the selection in one
+        run_commands call: focus is restored after every standalone
+        injection, so a selection made by an earlier separate call can be
+        lost before this call runs.
         """
         return runtime.type_text(
-            text, interval=interval, window_title=window_title
+            text,
+            interval=interval,
+            settle=settle,
+            window_title=window_title,
         )
 
     @mcp.tool(annotations=WRITE)
@@ -141,6 +163,7 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
     def press_key(
         key: str,
         hold: float = 0.02,
+        settle: float = DEFAULT_INJECTION_SETTLE,
         window_title: str | None = None,
     ) -> dict[str, Any]:
         """Press a key or hotkey, for example "enter", "tab", or "ctrl+shift+s".
@@ -150,10 +173,23 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
         blocked for the injection. Always pass the window_title you inspected:
         if that window lost focus, the server blocks input and forces it back
         to the foreground before pressing, then restores the window that had
-        focus before. If either focus change fails, the call raises an error: a
-        lost key, or focus left on the wrong window, is never silent.
+        focus before. When focus had to be taken, settle (default 0.2 s) holds
+        the gate closed a little longer so the target can process the key
+        before focus is restored; raise it if a shortcut such as ctrl+l is
+        lost after a refocus. If either focus change fails, the call raises an
+        error: a lost key, or focus left on the wrong window, is never silent.
+
+        When this selects text (for example ctrl+a), queue the type_text that
+        replaces the selection in the same run_commands call: focus is
+        restored after every standalone injection, and a selection can be
+        lost between separate calls.
         """
-        return runtime.press_key(key, hold=hold, window_title=window_title)
+        return runtime.press_key(
+            key,
+            hold=hold,
+            settle=settle,
+            window_title=window_title,
+        )
 
     @mcp.tool(annotations=WRITE)
     @tool_errors
@@ -199,3 +235,15 @@ def register_input_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Setti
         if Windows refuses the focus request.
         """
         return runtime.focus_window(window_title, timeout=timeout)
+
+    return {
+        "click": click,
+        "move_mouse": move_mouse,
+        "move_mouse_by": move_mouse_by,
+        "drag": drag,
+        "type_text": type_text,
+        "press_key": press_key,
+        "scroll": scroll,
+        "cursor_position": cursor_position,
+        "focus_window": focus_window,
+    }

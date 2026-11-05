@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Image
@@ -16,7 +16,9 @@ from ..settings import Settings
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
 
-def register_observe_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Settings) -> None:
+def register_observe_tools(
+    mcp: MCPServer, runtime: PyFindRuntime, settings: Settings
+) -> dict[str, Callable[..., Any]]:
     @mcp.tool(annotations=READ_ONLY)
     @tool_errors
     def list_windows(query: str | None = None, visible_only: bool = True) -> dict[str, Any]:
@@ -102,3 +104,10 @@ def register_observe_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Set
         result["target"] = target
         result["captured_at"] = capture_meta.get("captured_at")
         return result
+
+    return {
+        "list_windows": list_windows,
+        "list_monitors": list_monitors,
+        "screenshot": screenshot,
+        "ocr": ocr,
+    }

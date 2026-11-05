@@ -112,7 +112,7 @@ def test_runtime_move_tools_work_while_mouse_is_blocked(tmp_path):
         runtime.close()
 
 
-def test_task_mode_blocks_only_during_injection(tmp_path):
+def test_input_task_blocks_only_during_injection(tmp_path):
     runtime = PyFindRuntime(_settings(tmp_path))
     runtime.begin_input_task()
     try:

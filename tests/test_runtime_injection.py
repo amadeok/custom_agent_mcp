@@ -13,9 +13,9 @@ class FakeGate:
         self.calls: list[tuple] = []
         self.fail_begin = fail_begin
 
-    def begin_task(self, *, mode=None) -> dict:
-        self.calls.append(("begin_task", mode))
-        return {"task_active": True, "task_started": True, "task_mode": mode}
+    def begin_task(self) -> dict:
+        self.calls.append(("begin_task",))
+        return {"task_active": True, "task_started": True}
 
     def end_task(self) -> dict:
         self.calls.append(("end_task",))
@@ -100,8 +100,8 @@ def test_every_injection_blocks_keyboard_and_mouse(tmp_path):
     runtime, gate, _ = _runtime(tmp_path)
 
     runtime.click(10, 10)
-    runtime.type_text("hi")
-    runtime.press_key("enter")
+    runtime.type_text("hi", interval=0)
+    runtime.press_key("enter", settle=0)
     runtime.scroll(1)
     runtime.close()
 
@@ -178,21 +178,29 @@ def test_task_and_injection_cues_fire_around_actions(tmp_path, monkeypatch):
 
     assert cues == ["start", "injection", "end"]
     assert gate.calls == [
-        ("begin_task", None),
+        ("begin_task",),
         ("begin_injection", True, True),
         ("end_injection", True, True, False),
         ("end_task",),
     ]
 
 
-def test_begin_input_task_passes_the_mode_to_the_gate(tmp_path):
+def test_begin_input_task_starts_without_a_mode(tmp_path):
     runtime, gate, _ = _runtime(tmp_path, beep=False)
 
-    runtime.begin_input_task(mode="task")
+    runtime.begin_input_task()
     runtime.end_input_task()
     runtime.close()
 
-    assert gate.calls == [("begin_task", "task"), ("end_task",)]
+    assert gate.calls == [("begin_task",), ("end_task",)]
+
+
+def test_begin_input_task_does_not_accept_a_mode(tmp_path):
+    runtime, _, _ = _runtime(tmp_path, beep=False)
+
+    with pytest.raises(TypeError):
+        runtime.begin_input_task(mode="task")
+    runtime.close()
 
 
 def _fake_window(runtime, handle=42, title="Notepad"):
@@ -226,7 +234,7 @@ def test_press_key_focuses_target_then_restores_previous_focus(tmp_path, monkeyp
     _fake_window(runtime)
     _stub_focus(monkeypatch, gate, owns=lambda h: False)
 
-    result = runtime.press_key("enter", window_title="Notepad")
+    result = runtime.press_key("enter", window_title="Notepad", settle=0)
     runtime.close()
 
     assert result["window_title"] == "Notepad"
@@ -342,7 +350,7 @@ def test_failed_focus_restore_raises_but_still_releases_the_gate(tmp_path, monke
     _stub_focus(monkeypatch, gate, owns=lambda h: False, restore=fail_restore)
 
     with pytest.raises(FocusNotAcquiredError, match="Focus was not restored"):
-        runtime.press_key("enter", window_title="Notepad")
+        runtime.press_key("enter", window_title="Notepad", settle=0)
     runtime.close()
 
     # The key was sent; only the restore failed, and the gate still opened.
@@ -365,6 +373,131 @@ def test_injection_and_focus_restore_failures_are_both_reported(tmp_path, monkey
     runtime.close()
 
     assert gate.calls[-1] == ("end_injection", True, True, False)
+
+
+def test_focus_sequence_holds_the_gate_and_restores_previous_focus(
+    tmp_path, monkeypatch
+):
+    runtime, gate, _ = _runtime(tmp_path)
+    _fake_window(runtime)
+    _stub_focus(monkeypatch, gate, owns=lambda h: False)
+    monkeypatch.setattr(
+        runtime_module.time,
+        "sleep",
+        lambda seconds: gate.calls.append(("sleep", seconds)),
+    )
+
+    with runtime.focus_sequence("Notepad", settle=0.2) as payload:
+        gate.calls.append(("body",))
+    runtime.close()
+
+    assert payload["focus_recovered"] is True
+    assert payload["focus_restored"] is True
+    assert payload["previous_window_handle"] == 7
+    assert gate.calls == [
+        ("begin_injection", True, True),
+        ("focus", 42, "Notepad"),
+        ("body",),
+        ("sleep", 0.2),
+        ("restore", 7, "OpenCode"),
+        ("end_injection", True, True, False),
+    ]
+
+
+def test_focus_sequence_restores_the_target_when_it_already_had_focus(
+    tmp_path, monkeypatch
+):
+    runtime, gate, _ = _runtime(tmp_path)
+    _fake_window(runtime)
+    _stub_focus(
+        monkeypatch,
+        gate,
+        owns=lambda h: True,
+        previous=(42, "Notepad"),
+    )
+
+    with runtime.focus_sequence("Notepad", settle=0) as payload:
+        gate.calls.append(("body",))
+    runtime.close()
+
+    assert payload["focus_recovered"] is False
+    assert payload["focus_restored"] is True
+    assert gate.calls == [
+        ("begin_injection", True, True),
+        ("focus", 42, "Notepad"),
+        ("body",),
+        ("restore", 42, "Notepad"),
+        ("end_injection", True, True, False),
+    ]
+
+
+def test_focus_sequence_restores_focus_when_the_body_raises(
+    tmp_path, monkeypatch
+):
+    runtime, gate, _ = _runtime(tmp_path)
+    _fake_window(runtime)
+    _stub_focus(monkeypatch, gate, owns=lambda h: False)
+    sleeps: list[float] = []
+    monkeypatch.setattr(runtime_module.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with runtime.focus_sequence("Notepad", settle=0.2):
+            raise RuntimeError("boom")
+    runtime.close()
+
+    assert sleeps == []
+    assert gate.calls == [
+        ("begin_injection", True, True),
+        ("focus", 42, "Notepad"),
+        ("restore", 7, "OpenCode"),
+        ("end_injection", True, True, False),
+    ]
+
+
+def test_focus_sequence_restores_after_a_failed_focus_acquisition(
+    tmp_path, monkeypatch
+):
+    runtime, gate, _ = _runtime(tmp_path)
+    _fake_window(runtime)
+    state = {"focused": PREVIOUS[0]}
+
+    def fail_after_moving(handle, *, title):
+        state["focused"] = handle
+        gate.calls.append(("focus", handle, title))
+        raise FocusNotAcquiredError("focus verification timed out")
+
+    def restore(handle, *, title):
+        state["focused"] = handle
+        gate.calls.append(("restore", handle, title))
+
+    _stub_focus(
+        monkeypatch,
+        gate,
+        owns=lambda h: h == state["focused"],
+        ensure=fail_after_moving,
+        restore=restore,
+    )
+
+    with pytest.raises(FocusNotAcquiredError, match="focus verification timed out"):
+        with runtime.focus_sequence("Notepad", settle=0):
+            pytest.fail("the body must not run")
+    runtime.close()
+
+    assert gate.calls == [
+        ("begin_injection", True, True),
+        ("focus", 42, "Notepad"),
+        ("restore", 7, "OpenCode"),
+        ("end_injection", True, True, False),
+    ]
+
+
+def test_focus_sequence_settle_must_be_within_range(tmp_path):
+    runtime, _, _ = _runtime(tmp_path)
+
+    with pytest.raises(ValueError, match="settle"):
+        with runtime.focus_sequence("Notepad", settle=3):
+            pass
+    runtime.close()
 
 
 def test_click_focuses_target_then_restores_previous_focus(tmp_path, monkeypatch):
@@ -562,3 +695,115 @@ def test_no_cues_when_beep_is_disabled(tmp_path, monkeypatch):
     runtime.close()
 
     assert cues == []
+
+
+def test_type_text_sends_one_codepoint_per_call_with_pacing(tmp_path, monkeypatch):
+    runtime, _, inject = _runtime(tmp_path)
+    sleeps: list[float] = []
+    monkeypatch.setattr(runtime_module.time, "sleep", sleeps.append)
+
+    result = runtime.type_text("abc")
+    runtime.close()
+
+    assert inject.calls == [
+        ("type_text", "a"),
+        ("type_text", "b"),
+        ("type_text", "c"),
+    ]
+    assert sleeps == pytest.approx([0.03, 0.03])
+    assert result["interval"] == pytest.approx(0.03)
+
+
+def test_type_text_with_zero_interval_still_sends_each_codepoint(tmp_path, monkeypatch):
+    runtime, _, inject = _runtime(tmp_path)
+    sleeps: list[float] = []
+    monkeypatch.setattr(runtime_module.time, "sleep", sleeps.append)
+
+    runtime.type_text("ab", interval=0)
+    runtime.close()
+
+    assert inject.calls == [("type_text", "a"), ("type_text", "b")]
+    assert sleeps == []
+
+
+def test_press_key_settle_runs_before_focus_is_restored(tmp_path, monkeypatch):
+    runtime, gate, _ = _runtime(tmp_path)
+    _fake_window(runtime)
+    _stub_focus(monkeypatch, gate, owns=lambda h: False)
+    monkeypatch.setattr(
+        runtime_module.time,
+        "sleep",
+        lambda seconds: gate.calls.append(("sleep", seconds)),
+    )
+
+    runtime.press_key("ctrl+l", window_title="Notepad")
+    runtime.close()
+
+    assert gate.calls == [
+        ("begin_injection", True, True),
+        ("focus", 42, "Notepad"),
+        ("begin_injection", True, True),
+        ("sleep", 0.2),
+        ("restore", 7, "OpenCode"),
+        ("end_injection", True, True, False),
+        ("end_injection", True, True, False),
+    ]
+
+
+def test_type_text_settle_runs_after_typing_before_restore(tmp_path, monkeypatch):
+    runtime, gate, inject = _runtime(tmp_path)
+    _fake_window(runtime)
+    _stub_focus(monkeypatch, gate, owns=lambda h: False)
+    monkeypatch.setattr(
+        runtime_module.time,
+        "sleep",
+        lambda seconds: gate.calls.append(("sleep", seconds)),
+    )
+
+    runtime.type_text("hi", interval=0, window_title="Notepad")
+    runtime.close()
+
+    assert inject.calls == [("type_text", "h"), ("type_text", "i")]
+    assert gate.calls.index(("sleep", 0.2)) < gate.calls.index(
+        ("restore", 7, "OpenCode")
+    )
+
+
+def test_settle_is_skipped_when_the_target_already_had_focus(tmp_path, monkeypatch):
+    runtime, gate, _ = _runtime(tmp_path)
+    _fake_window(runtime)
+    _stub_focus(monkeypatch, gate, owns=lambda h: True)
+    monkeypatch.setattr(
+        runtime_module.time,
+        "sleep",
+        lambda seconds: pytest.fail("settle must not run without a focus restore"),
+    )
+
+    runtime.press_key("enter", window_title="Notepad")
+    runtime.close()
+
+
+def test_settle_is_skipped_when_the_injection_fails(tmp_path, monkeypatch):
+    runtime, gate, inject = _runtime(tmp_path)
+    _fake_window(runtime)
+    _stub_focus(monkeypatch, gate, owns=lambda h: False)
+    inject.fail_on = "tap"
+    sleeps: list[float] = []
+    monkeypatch.setattr(runtime_module.time, "sleep", sleeps.append)
+
+    with pytest.raises(RuntimeError, match="tap failed"):
+        runtime.press_key("enter", window_title="Notepad")
+    runtime.close()
+
+    assert sleeps == []
+    assert ("restore", 7, "OpenCode") in gate.calls
+
+
+def test_settle_must_be_within_range(tmp_path):
+    runtime, _, _ = _runtime(tmp_path)
+
+    with pytest.raises(ValueError, match="settle"):
+        runtime.press_key("enter", settle=3)
+    with pytest.raises(ValueError, match="settle"):
+        runtime.type_text("x", settle=-0.1)
+    runtime.close()

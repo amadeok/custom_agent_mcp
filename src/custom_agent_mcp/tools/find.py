@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
@@ -14,7 +14,9 @@ READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 MatchMode = Literal["in", "=", "startswith", "endswith"]
 
 
-def register_find_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Settings) -> None:
+def register_find_tools(
+    mcp: MCPServer, runtime: PyFindRuntime, settings: Settings
+) -> dict[str, Callable[..., Any]]:
     @mcp.tool(annotations=READ_ONLY)
     @tool_errors
     def find_text(
@@ -106,3 +108,10 @@ def register_find_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Settin
     def reload_templates() -> dict[str, Any]:
         """Clear the template cache and reload PNG and WebP templates from disk."""
         return runtime.reload_templates()
+
+    return {
+        "find_text": find_text,
+        "find_image": find_image,
+        "list_templates": list_templates,
+        "reload_templates": reload_templates,
+    }

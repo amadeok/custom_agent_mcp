@@ -1,0 +1,113 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "MCP: in-process harness (breakpoints in tools)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.debug_mcp",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYFIND_MCP_LOG_LEVEL": "DEBUG"
+      },
+      "args": ["list_monitors"]
+    },
+    {
+      "name": "MCP: in-process harness (input tools enabled)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.debug_mcp",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYFIND_MCP_LOG_LEVEL": "DEBUG",
+        "PYFIND_MCP_ALLOW_INPUT": "true",
+        "PYFIND_MCP_ALLOW_INPUT_GATE": "true"
+      },
+      "args": []
+    },
+    {
+      "name": "MCP: tool scratchpad (tkinter GUI)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.tool_scratchpad",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYFIND_MCP_LOG_LEVEL": "DEBUG",
+        "PYFIND_MCP_ALLOW_INPUT": "true",
+        "PYFIND_MCP_ALLOW_INPUT_GATE": "true"
+      }
+    },
+    {
+      "name": "MCP: shared HTTP server (port 8765)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "custom_agent_mcp",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYFIND_MCP_LOG_LEVEL": "DEBUG",
+        "PYFIND_MCP_ALLOW_INPUT": "true",
+        "PYFIND_MCP_ALLOW_INPUT_GATE": "true"
+      },
+      "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8765"]
+    },
+    {
+      "name": "MCP: tool scratchpad attached to shared server",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.tool_scratchpad",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYFIND_MCP_URL": "http://127.0.0.1:8765/mcp",
+        "PYFIND_MCP_LOG_LEVEL": "DEBUG"
+      }
+    },
+    {
+      "name": "MCP: attach to debugpy server (port 5678)",
+      "type": "debugpy",
+      "request": "attach",
+      "connect": {
+        "host": "127.0.0.1",
+        "port": 5678
+      },
+      "justMyCode": false,
+      "pathMappings": [
+        {
+          "localRoot": "${workspaceFolder}/src",
+          "remoteRoot": "${workspaceFolder}/src"
+        }
+      ]
+    },
+    {
+      "name": "MCP: launch stdio server under debugger",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "custom_agent_mcp",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYFIND_MCP_LOG_LEVEL": "DEBUG"
+      }
+    },
+    {
+      "name": "pytest: current file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "args": ["-q", "-s", "${file}"]
+    }
+  ]
+}

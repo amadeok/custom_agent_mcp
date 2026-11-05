@@ -304,33 +304,55 @@ def test_begin_task_is_idempotent(tmp_path):
     assert status["task_started"] is False
 
 
-def test_begin_task_injection_mode_does_not_block(tmp_path):
+def test_begin_task_without_hotkey_blocks_nothing(tmp_path):
     backend = FakeGateBackend()
-    gate = InputGate(_settings(tmp_path), backend=backend)
+    gate = InputGate(_settings(tmp_path, input_gate_hotkey=""), backend=backend)
 
-    status = gate.begin_task(mode="injection")
-
-    assert status["task_mode"] == "injection"
-    assert status["mode"] == "injection"
-    assert status["any_blocked"] is False
-    assert backend.escape_callback is not None
-
-
-def test_begin_task_task_mode_blocks_until_end(tmp_path):
-    backend = FakeGateBackend()
-    gate = InputGate(_settings(tmp_path), backend=backend)
-
-    status = gate.begin_task(mode="task")
+    status = gate.begin_task()
 
     assert status["task_active"] is True
-    assert status["task_mode"] == "task"
-    assert status["any_blocked"] is True
-    assert backend.keyboard_blocked is True
-    assert backend.mouse_blocked is True
-    assert backend.escape_callback is not None
+    assert status["any_blocked"] is False
+    assert status["ttl"] is None
+    assert backend.escape_callback is None
 
-    # Injections are nested leases and must not open the task block.
+
+def test_status_before_a_task_has_no_mode_fields(tmp_path):
+    gate = InputGate(_settings(tmp_path), backend=FakeGateBackend())
+
+    status = gate.status()
+
+    assert status["task_active"] is False
+    assert "mode" not in status
+    assert "task_mode" not in status
+
+
+def test_begin_task_status_has_no_mode_fields(tmp_path):
+    backend = FakeGateBackend()
+    gate = InputGate(_settings(tmp_path), backend=backend)
+
+    status = gate.begin_task()
+
+    assert status["task_active"] is True
+    assert status["any_blocked"] is False
+    assert "mode" not in status
+    assert "task_mode" not in status
+
+
+def test_begin_task_does_not_accept_a_mode_argument(tmp_path):
+    gate = InputGate(_settings(tmp_path), backend=FakeGateBackend())
+
+    with pytest.raises(TypeError):
+        gate.begin_task(mode="task")
+
+
+def test_manual_block_survives_injections_and_is_released_by_end_task(tmp_path):
+    backend = FakeGateBackend()
+    gate = InputGate(_settings(tmp_path), backend=backend)
+    gate.begin_task()
+    gate.arm(keyboard=True, mouse=True)
+
     lease = gate.begin_injection(keyboard=True, mouse=True)
+
     assert lease == {"keyboard": False, "mouse": False, "escape": False}
     gate.end_injection(**lease)
     assert backend.keyboard_blocked is True
@@ -338,31 +360,10 @@ def test_begin_task_task_mode_blocks_until_end(tmp_path):
 
     status = gate.end_task()
 
-    assert status["task_mode"] is None
+    assert status["task_active"] is False
     assert status["any_blocked"] is False
     assert backend.keyboard_blocked is False
     assert backend.mouse_blocked is False
-    assert backend.escape_callback is None
-
-
-def test_task_mode_defaults_from_settings(tmp_path):
-    backend = FakeGateBackend()
-    gate = InputGate(
-        _settings(tmp_path, input_gate_mode="task"), backend=backend
-    )
-
-    status = gate.begin_task()
-
-    assert status["task_mode"] == "task"
-    assert status["any_blocked"] is True
-    gate.end_task()
-
-
-def test_begin_task_rejects_unknown_mode(tmp_path):
-    gate = InputGate(_settings(tmp_path), backend=FakeGateBackend())
-
-    with pytest.raises(ValueError, match="mode"):
-        gate.begin_task(mode="always")
 
 
 def test_injection_blocks_only_its_devices_and_restores_them(tmp_path):
@@ -414,6 +415,61 @@ def test_injection_does_not_open_a_manual_block(tmp_path):
     assert backend.mouse_blocked is True
 
     gate.release()
+
+
+def test_manual_block_layered_on_an_injection_survives_the_lease(tmp_path):
+    backend = FakeGateBackend()
+    gate = InputGate(_settings(tmp_path), backend=backend)
+
+    lease = gate.begin_injection(keyboard=True, mouse=True)
+    assert lease == {"keyboard": True, "mouse": True, "escape": True}
+
+    gate.arm(keyboard=True, mouse=True)
+    gate.end_injection(**lease)
+
+    # The outer lease owned the devices, but the manual block must outlive it.
+    assert backend.keyboard_blocked is True
+    assert backend.mouse_blocked is True
+
+    gate.release()
+
+    assert backend.keyboard_blocked is False
+    assert backend.mouse_blocked is False
+
+
+def test_manual_block_can_cover_one_device_under_a_lease(tmp_path):
+    backend = FakeGateBackend()
+    gate = InputGate(_settings(tmp_path), backend=backend)
+
+    lease = gate.begin_injection(keyboard=True, mouse=True)
+    gate.arm(keyboard=True, mouse=False)
+    gate.end_injection(**lease)
+
+    assert backend.keyboard_blocked is True
+    assert backend.mouse_blocked is False
+
+    gate.release()
+
+    assert backend.keyboard_blocked is False
+
+
+def test_arm_rollback_keeps_an_outer_injection_block(tmp_path):
+    backend = FakeGateBackend()
+    gate = InputGate(_settings(tmp_path), backend=backend)
+    lease = gate.begin_injection(keyboard=True, mouse=True)
+    backend.fail_mouse_block = True
+
+    with pytest.raises(PyFindRuntimeError, match="mouse hook failed"):
+        gate.arm(keyboard=True, mouse=True)
+
+    # A failed manual arm must not roll back blocks the lease still owns.
+    assert backend.keyboard_blocked is True
+    assert backend.mouse_blocked is True
+
+    gate.end_injection(**lease)
+
+    assert backend.keyboard_blocked is False
+    assert backend.mouse_blocked is False
 
 
 def test_injection_rolls_back_a_partial_block(tmp_path):

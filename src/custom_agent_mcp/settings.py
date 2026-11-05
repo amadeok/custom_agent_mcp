@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-_INPUT_GATE_MODES = {"injection", "task"}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -63,7 +62,6 @@ class Settings:
     allow_input: bool = False
     allow_input_gate: bool = False
     input_gate_hotkey: str = "ctrl+alt+shift+f12"
-    input_gate_mode: str = "injection"
     input_gate_max_ttl: float = 600.0
     beep: bool = True
     image_format: str = "png"
@@ -86,16 +84,6 @@ def _default_input_gate_hotkey() -> str:
     return hotkey
 
 
-def _default_input_gate_mode() -> str:
-    raw = os.getenv("PYFIND_MCP_INPUT_GATE_MODE", "injection").strip().lower()
-    if raw not in _INPUT_GATE_MODES:
-        raise ValueError(
-            "PYFIND_MCP_INPUT_GATE_MODE must be 'injection' or 'task', "
-            f"got {raw!r}"
-        )
-    return raw
-
-
 def _default_image_format() -> str:
     raw = os.getenv("PYFIND_MCP_IMAGE_FORMAT", "png").strip().lower() or "png"
     if raw not in {"png", "webp"}:
@@ -116,7 +104,6 @@ def load_settings() -> Settings:
         allow_input=_env_bool("PYFIND_MCP_ALLOW_INPUT", False),
         allow_input_gate=_env_bool("PYFIND_MCP_ALLOW_INPUT_GATE", False),
         input_gate_hotkey=_default_input_gate_hotkey(),
-        input_gate_mode=_default_input_gate_mode(),
         input_gate_max_ttl=_env_float("PYFIND_MCP_INPUT_GATE_MAX_TTL", 600.0, 1.0, 3600.0),
         beep=_env_bool("PYFIND_MCP_BEEP", True),
         image_format=_default_image_format(),

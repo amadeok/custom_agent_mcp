@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Callable
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
@@ -32,27 +32,31 @@ TASK_START = ToolAnnotations(
     open_world_hint=False,
 )
 
-GATE_MODE = Literal["injection", "task"]
 
-
-def register_gate_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Settings) -> None:
+def register_gate_tools(
+    mcp: MCPServer, runtime: PyFindRuntime, settings: Settings
+) -> dict[str, Callable[..., Any]]:
     @mcp.tool(annotations=TASK_START)
     @tool_errors
-    def begin_input_task(mode: GATE_MODE | None = None) -> dict[str, Any]:
+    def begin_input_task() -> dict[str, Any]:
         """Start an injected-input task and play the ascending start cue.
 
-        mode="injection" (default) keeps physical input available while the
-        agent observes, waits, or thinks: each input tool blocks only for its
-        own injection and plays a short blip. mode="task" blocks keyboard and
-        mouse immediately and holds them until end_input_task, the emergency
-        hotkey, or server shutdown; use it only when the user asks for a full
-        lockout or the workflow cannot tolerate human input. When unsure, use
-        injection. The mode defaults to PYFIND_MCP_INPUT_GATE_MODE; the result's
-        task_mode is what is actually in force. A mode change requires
-        end_input_task first. Call end_input_task after the last action, even if
-        the task failed.
+        Physical input stays available between calls: each input tool blocks
+        keyboard and mouse only for the duration of its own injection and
+        plays a short blip. The emergency hotkey is installed at task start.
+        To hold input blocked continuously, use block_user_input with a
+        bounded ttl instead.
+
+        Queue commands that do not need visual feedback in one run_commands
+        call, for example ctrl+a immediately followed by type_text to replace a
+        selection. A focused run_commands call follows the strict focus rules:
+        it blocks input, captures the current foreground, focuses the target,
+        runs the queue, restores the captured window, and only then releases
+        input. Focus is not restored between queued commands, so the selection
+        stays live. Call end_input_task after the last action, even if the task
+        failed.
         """
-        return runtime.begin_input_task(mode=mode)
+        return runtime.begin_input_task()
 
     @mcp.tool(annotations=RELEASE)
     @tool_errors
@@ -99,3 +103,11 @@ def register_gate_tools(mcp: MCPServer, runtime: PyFindRuntime, settings: Settin
     def input_block_status() -> dict[str, Any]:
         """Report task state, whether input is blocked, and when it will release."""
         return runtime.input_block_status()
+
+    return {
+        "begin_input_task": begin_input_task,
+        "end_input_task": end_input_task,
+        "block_user_input": block_user_input,
+        "unblock_user_input": unblock_user_input,
+        "input_block_status": input_block_status,
+    }

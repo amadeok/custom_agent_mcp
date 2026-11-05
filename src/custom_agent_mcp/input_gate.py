@@ -222,11 +222,14 @@ class InputGate:
         self._lock = threading.RLock()
         self._closed = False
         self._task_active = False
-        self._task_mode: str | None = None
         self._timer: threading.Timer | None = None
         self._deadline: float | None = None
         self._ttl: float | None = None
         self._generation = 0
+        # Manual blocks are layered blocks: an injection lease may own the
+        # physical device, but a manual arm must survive the lease ending.
+        self._manual_keyboard = False
+        self._manual_mouse = False
         self._escape_callback: _EmergencyRelease | None = None
         self._last_release_reason: str | None = None
         self._last_release_at: str | None = None
@@ -277,6 +280,11 @@ class InputGate:
                 backend.validate_hotkey(hotkey)
 
             armed: list[str] = []
+            escape_was_present = self._escape_callback is not None
+            keyboard_owned = keyboard and not self._device_blocked(
+                backend, "keyboard"
+            )
+            mouse_owned = mouse and not self._device_blocked(backend, "mouse")
             try:
                 # Arm the escape path before closing any gate, so there is never
                 # a moment where physical input is blocked without a way out.
@@ -284,10 +292,12 @@ class InputGate:
                     self._install_escape_locked(backend, hotkey)
                 if keyboard:
                     backend.block_keyboard()
-                    armed.append("keyboard")
+                    if keyboard_owned:
+                        armed.append("keyboard")
                 if mouse:
                     backend.block_mouse()
-                    armed.append("mouse")
+                    if mouse_owned:
+                        armed.append("mouse")
             except Exception:
                 for device in reversed(armed):
                     try:
@@ -297,11 +307,19 @@ class InputGate:
                             backend.unblock_mouse()
                     except Exception:
                         logger.exception("Failed to roll back the %s block", device)
-                try:
-                    self._remove_escape_locked(backend)
-                except Exception:
-                    logger.exception("Failed to remove the input gate hotkey")
+                if hotkey and not escape_was_present:
+                    try:
+                        self._remove_escape_locked(backend)
+                    except Exception:
+                        logger.exception("Failed to remove the input gate hotkey")
                 raise
+
+            # The manual block is layered on top of any injection lease: it
+            # must survive that lease ending.
+            if keyboard:
+                self._manual_keyboard = True
+            if mouse:
+                self._manual_mouse = True
 
             self._set_deadline_locked(ttl)
             self._last_release_reason = None
@@ -346,11 +364,13 @@ class InputGate:
 
             errors: list[str] = []
             if keyboard:
+                self._manual_keyboard = False
                 try:
                     backend.unblock_keyboard()
                 except Exception as exc:
                     errors.append(f"keyboard: {exc}")
             if mouse:
+                self._manual_mouse = False
                 try:
                     backend.unblock_mouse()
                 except Exception as exc:
@@ -373,18 +393,13 @@ class InputGate:
                 raise PyFindRuntimeError("; ".join(errors))
             return self._status_locked(backend)
 
-    def begin_task(self, *, mode: str | None = None) -> dict[str, Any]:
-        """Start a gated input task.
+    def begin_task(self) -> dict[str, Any]:
+        """Start an injection-gated input task.
 
-        ``mode="injection"`` (the default) keeps physical input available
-        between calls and blocks only for each injection. ``mode="task"``
-        blocks keyboard and mouse immediately and keeps them blocked until
-        :meth:`end_task`, the emergency hotkey, or shutdown.
+        Physical input stays available between calls: each injection blocks
+        keyboard and mouse only for its own duration. The emergency hotkey is
+        installed at task start and stays until :meth:`end_task`.
         """
-        resolved = (mode or self._settings.input_gate_mode).strip().lower()
-        if resolved not in {"injection", "task"}:
-            raise ValueError("mode must be 'injection' or 'task'")
-
         hotkey = self._settings.input_gate_hotkey
         with self._lock:
             if self._closed:
@@ -392,21 +407,12 @@ class InputGate:
             backend = self._ensure_backend_locked()
             started = not self._task_active
             if started:
-                if resolved == "task":
-                    # arm() installs the escape hotkey before closing the gate
-                    # and rolls back cleanly if either device fails.
-                    self.arm(keyboard=True, mouse=True)
-                elif hotkey:
+                if hotkey:
                     backend.validate_hotkey(hotkey)
                     self._install_escape_locked(backend, hotkey)
                 self._task_active = True
-                self._task_mode = resolved
                 logger.info(
-                    "Input task started in {} mode{}",
-                    resolved,
-                    " (input blocked until end_input_task)"
-                    if resolved == "task"
-                    else " (input blocks only during each injection)",
+                    "Input task started (input blocks only during each injection)"
                 )
             payload = self._status_locked(backend)
             payload["task_started"] = started
@@ -417,7 +423,6 @@ class InputGate:
         with self._lock:
             was_active = self._task_active
             self._task_active = False
-            self._task_mode = None
             payload = self.release(reason="task_end")
             payload["task_ended"] = was_active
             return payload
@@ -501,12 +506,12 @@ class InputGate:
                 return
 
             errors: list[str] = []
-            if keyboard:
+            if keyboard and not self._manual_keyboard:
                 try:
                     backend.unblock_keyboard()
                 except Exception as exc:
                     errors.append(f"keyboard: {exc}")
-            if mouse:
+            if mouse and not self._manual_mouse:
                 try:
                     backend.unblock_mouse()
                 except Exception as exc:
@@ -545,7 +550,6 @@ class InputGate:
         logger.warning("Input gate emergency hotkey pressed; releasing.")
         with self._lock:
             self._task_active = False
-            self._task_mode = None
         try:
             # This runs on the keyboard hook thread; avoid a second log write.
             self.release(reason="emergency_hotkey", log=False)
@@ -561,7 +565,8 @@ class InputGate:
                 return
             self._closed = True
             self._task_active = False
-            self._task_mode = None
+            self._manual_keyboard = False
+            self._manual_mouse = False
             self._cancel_timer_locked()
             backend = self._backend
             self._escape_callback = None
@@ -684,8 +689,6 @@ class InputGate:
             "available": bool(available),
             "closed": self._closed,
             "task_active": self._task_active,
-            "task_mode": self._task_mode,
-            "mode": self._settings.input_gate_mode,
             "keyboard_blocked": bool(keyboard_blocked),
             "mouse_blocked": bool(mouse_blocked),
             "keyboard_hook_running": bool(keyboard_running),

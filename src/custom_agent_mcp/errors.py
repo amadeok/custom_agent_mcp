@@ -5,7 +5,7 @@ from typing import Callable, ParamSpec, TypeVar
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from .exceptions import PyFindRuntimeError
+from .exceptions import PyFindRuntimeError, SearxngError
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -24,7 +24,7 @@ def tool_errors(fn: Callable[P, R]) -> Callable[P, R]:
             return fn(*args, **kwargs)
         except ToolError:
             raise
-        except (PyFindRuntimeError, ValueError, OSError) as exc:
+        except (PyFindRuntimeError, SearxngError, ValueError, OSError) as exc:
             raise ToolError(str(exc)) from exc
 
     return wrapper

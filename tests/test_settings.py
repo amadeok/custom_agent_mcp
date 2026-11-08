@@ -18,6 +18,9 @@ def test_load_settings_defaults(monkeypatch):
         "PYFIND_MCP_MAX_WORKERS",
         "PYFIND_MCP_THRESHOLD",
         "PYFIND_MCP_LOG_LEVEL",
+        "SEARXNG_MCP_BASE_URL",
+        "SEARXNG_MCP_TIMEOUT",
+        "SEARXNG_MCP_USER_AGENT",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -35,6 +38,9 @@ def test_load_settings_defaults(monkeypatch):
     assert settings.max_workers == 2
     assert settings.threshold == 0.8
     assert settings.log_level == "WARNING"
+    assert settings.searxng_base_url == "http://127.0.0.1:8080"
+    assert settings.searxng_timeout == 15.0
+    assert settings.searxng_user_agent.startswith("custom-agent-mcp/")
 
 
 def test_load_settings_overrides(monkeypatch, tmp_path):
@@ -51,6 +57,9 @@ def test_load_settings_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("PYFIND_MCP_MAX_WORKERS", "4")
     monkeypatch.setenv("PYFIND_MCP_THRESHOLD", "0.65")
     monkeypatch.setenv("PYFIND_MCP_LOG_LEVEL", "debug")
+    monkeypatch.setenv("SEARXNG_MCP_BASE_URL", "http://search.local:8888/searxng")
+    monkeypatch.setenv("SEARXNG_MCP_TIMEOUT", "30")
+    monkeypatch.setenv("SEARXNG_MCP_USER_AGENT", "test-agent/1.0")
 
     settings = load_settings()
 
@@ -67,6 +76,9 @@ def test_load_settings_overrides(monkeypatch, tmp_path):
     assert settings.max_workers == 4
     assert settings.threshold == 0.65
     assert settings.log_level == "DEBUG"
+    assert settings.searxng_base_url == "http://search.local:8888/searxng"
+    assert settings.searxng_timeout == 30.0
+    assert settings.searxng_user_agent == "test-agent/1.0"
 
 
 def test_removed_gate_mode_env_is_ignored(monkeypatch):

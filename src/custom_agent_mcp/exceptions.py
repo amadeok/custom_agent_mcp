@@ -23,3 +23,7 @@ class Loge2NotInstalledError(PyFindRuntimeError):
 
 class FocusNotAcquiredError(PyFindRuntimeError):
     pass
+
+
+class SearxngError(RuntimeError):
+    pass

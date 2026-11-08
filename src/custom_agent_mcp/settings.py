@@ -5,6 +5,13 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .searxng import (
+    DEFAULT_SEARXNG_URL,
+    DEFAULT_START_TIMEOUT,
+    DEFAULT_TIMEOUT,
+    DEFAULT_USER_AGENT,
+)
+
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
 
@@ -74,6 +81,11 @@ class Settings:
     preview_max_width: int = 1600
     max_output_files: int = 100
     log_level: str = "WARNING"
+    searxng_base_url: str = DEFAULT_SEARXNG_URL
+    searxng_timeout: float = DEFAULT_TIMEOUT
+    searxng_user_agent: str = DEFAULT_USER_AGENT
+    searxng_start_cmd: str = ""
+    searxng_start_timeout: float = DEFAULT_START_TIMEOUT
 
 
 def _default_input_gate_hotkey() -> str:
@@ -116,4 +128,15 @@ def load_settings() -> Settings:
         preview_max_width=_env_int("PYFIND_MCP_PREVIEW_MAX_WIDTH", 1600, 100, 10000),
         max_output_files=_env_int("PYFIND_MCP_MAX_OUTPUT_FILES", 100, 1, 10000),
         log_level=level,
+        searxng_base_url=(
+            os.getenv("SEARXNG_MCP_BASE_URL", "").strip() or DEFAULT_SEARXNG_URL
+        ),
+        searxng_timeout=_env_float("SEARXNG_MCP_TIMEOUT", DEFAULT_TIMEOUT, 1.0, 120.0),
+        searxng_user_agent=(
+            os.getenv("SEARXNG_MCP_USER_AGENT", "").strip() or DEFAULT_USER_AGENT
+        ),
+        searxng_start_cmd=os.getenv("SEARXNG_MCP_START_CMD", "").strip(),
+        searxng_start_timeout=_env_float(
+            "SEARXNG_MCP_START_TIMEOUT", DEFAULT_START_TIMEOUT, 1.0, 300.0
+        ),
     )

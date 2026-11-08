@@ -37,6 +37,8 @@ def test_stdio_server_lists_tools(tmp_path):
     assert "screenshot" in names
     assert "ocr" in names
     assert "find_image" in names
+    assert "web_search" in names
+    assert "web_fetch" in names
     assert "run_commands" in names
     assert "click" not in names
     assert "block_user_input" not in names

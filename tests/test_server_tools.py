@@ -41,6 +41,8 @@ def test_observation_tools_registered(tmp_path):
     assert "find_image" in names
     assert "list_templates" in names
     assert "reload_templates" in names
+    assert "web_search" in names
+    assert "web_fetch" in names
     assert "click" not in names
     assert "type_text" not in names
     assert "move_mouse" not in names
@@ -48,6 +50,26 @@ def test_observation_tools_registered(tmp_path):
     assert "unblock_user_input" not in names
     assert "begin_input_task" not in names
     assert "end_input_task" not in names
+
+
+def test_web_tools_are_open_world_reads(tmp_path):
+    tools = _tools(
+        Settings(
+            templates_dir=tmp_path / "templates",
+            output_dir=tmp_path / "out",
+        )
+    )
+
+    for name in ("web_search", "web_fetch"):
+        annotations = tools[name].annotations
+        assert annotations is not None
+        assert annotations.read_only_hint is True
+        assert annotations.open_world_hint is True
+
+    assert "query" in tools["web_search"].input_schema["properties"]
+    assert "instance_url" in tools["web_search"].input_schema["properties"]
+    assert "url" in tools["web_fetch"].input_schema["properties"]
+    assert "max_chars" in tools["web_fetch"].input_schema["properties"]
 
 
 def test_input_tools_registered_when_enabled(tmp_path):

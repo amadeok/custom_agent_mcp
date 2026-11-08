@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "custom-agent-mcp"
 version = "0.1.0"
-description = "MCP servers for local automation, starting with PyFind"
+description = "MCP server for local Windows automation and SearXNG web research"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

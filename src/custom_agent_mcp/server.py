@@ -14,6 +14,7 @@ from .tools.find import register_find_tools
 from .tools.gate import register_gate_tools
 from .tools.input import register_input_tools
 from .tools.observe import register_observe_tools
+from .tools.web import register_web_tools
 
 # PyFind (and some of its dependencies) use print() for diagnostics. stdout is
 # the MCP stdio wire, so send every print to stderr before anything else runs.
@@ -28,7 +29,8 @@ def _stderr_print(*args, **kwargs):
 builtins.print = _stderr_print
 
 INSTRUCTIONS = """\
-PyFind is a Windows screen-reading and GUI-automation server.
+This server combines local Windows screen automation (PyFind) with web
+research through SearXNG.
 
 Start with list_windows or list_monitors to learn the desktop layout, then use
 screenshot or ocr to inspect the current screen. Prefer find_text and
@@ -37,6 +39,18 @@ find_image over guessing coordinates.
 All rectangles are absolute virtual-screen pixels. Secondary monitors may have
 negative x or y values. A rectangle is {x, y, width, height}. Use at most one of
 window_title, monitor, or region in a call.
+
+SearXNG web tools are always available. web_search queries the configured
+instance (SEARXNG_MCP_BASE_URL, default http://127.0.0.1:8080) and returns
+titles, URLs, snippets, answers, and engine metadata. web_fetch downloads an
+HTTP(S) page and returns readable text with inline Markdown links, truncated
+to max_chars. Use web_search for current or externally verifiable information,
+then web_fetch for the sources that matter. Do not put web tools in
+run_commands: they are network calls, and a focused queue would hold the input
+gate closed while the request runs. Never put secrets or private data in a
+search query.
+Start_searxng is registered only when SEARXNG_MCP_START_CMD points at a
+launcher; use it when web_search reports that the instance is unreachable.
 
 screenshot writes a full-resolution image (PNG by default, or WebP when
 configured) and returns a downscaled preview plus the full path. Templates for
@@ -140,7 +154,10 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         "pyfind",
         title="PyFind",
         version=__version__,
-        description="Windows screen capture, OCR, template matching, and optional GUI input blocking/injection.",
+        description=(
+            "Windows screen capture, OCR, template matching, SearXNG web search, "
+            "and optional GUI input blocking/injection."
+        ),
         instructions=INSTRUCTIONS,
         log_level=settings.log_level,
     )
@@ -148,6 +165,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     handlers = {}
     handlers.update(register_observe_tools(server, runtime, settings))
     handlers.update(register_find_tools(server, runtime, settings))
+    handlers.update(register_web_tools(server, settings))
     if settings.allow_input:
         handlers.update(register_input_tools(server, runtime, settings))
         if settings.allow_input_gate:

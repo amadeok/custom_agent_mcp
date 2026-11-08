@@ -1,3 +1,3 @@
-"""MCP servers for local automation, starting with PyFind."""
+"""MCP server for local Windows automation and SearXNG web research."""
 
 __version__ = "0.1.0"

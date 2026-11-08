@@ -83,8 +83,12 @@ class Command(BaseModel):
 
 
 # screenshot returns image content, which is not useful inside a blind JSON
-# result. run_commands is excluded so a queue cannot recurse.
-_EXCLUDED_COMMANDS = frozenset({"screenshot", "run_commands"})
+# result. run_commands is excluded so a queue cannot recurse. Web tools are
+# excluded because a focused queue would hold the input gate closed while a
+# remote request runs.
+_EXCLUDED_COMMANDS = frozenset(
+    {"screenshot", "run_commands", "web_search", "web_fetch"}
+)
 
 CommandHandler = Callable[..., Any]
 
@@ -304,7 +308,7 @@ def register_batch_tools(
         "any sleep, find_text, or find_image wait, so keep waits short; "
         "releasing it with a queued gate command opens the block early.\n\n"
         "The queue accepts the registered input, gate, find, OCR, and "
-        "observation tools, except screenshot and run_commands itself. "
+        "observation tools, except screenshot, run_commands, and the web tools. "
         f"Available now: {available}. Use find_text or find_image with timeout "
         "inside the queue to wait for UI state. A screenshot or a visual "
         "decision ends the queue: inspect, then start the next one."

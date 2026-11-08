@@ -23,6 +23,11 @@ def test_load_settings_defaults(monkeypatch):
         "SEARXNG_MCP_USER_AGENT",
         "SEARXNG_MCP_START_CMD",
         "SEARXNG_MCP_START_TIMEOUT",
+        "TINYFISH_API_KEY",
+        "TINYFISH_MCP_FALLBACK",
+        "TINYFISH_MCP_BASE_URL",
+        "TINYFISH_MCP_TIMEOUT",
+        "TINYFISH_MCP_ENV_FILE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -45,6 +50,10 @@ def test_load_settings_defaults(monkeypatch):
     assert settings.searxng_user_agent.startswith("custom-agent-mcp/")
     assert settings.searxng_start_cmd == ""
     assert settings.searxng_start_timeout == 90.0
+    assert settings.tinyfish_fallback is True
+    assert settings.tinyfish_base_url == "https://api.search.tinyfish.ai"
+    assert settings.tinyfish_timeout == 15.0
+    assert settings.tinyfish_env_file == ""
 
 
 def test_load_settings_overrides(monkeypatch, tmp_path):
@@ -64,6 +73,10 @@ def test_load_settings_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("SEARXNG_MCP_BASE_URL", "http://search.local:8888/searxng")
     monkeypatch.setenv("SEARXNG_MCP_TIMEOUT", "30")
     monkeypatch.setenv("SEARXNG_MCP_USER_AGENT", "test-agent/1.0")
+    monkeypatch.setenv("TINYFISH_MCP_FALLBACK", "false")
+    monkeypatch.setenv("TINYFISH_MCP_BASE_URL", "http://tinyfish.local")
+    monkeypatch.setenv("TINYFISH_MCP_TIMEOUT", "20")
+    monkeypatch.setenv("TINYFISH_MCP_ENV_FILE", "custom.env")
 
     settings = load_settings()
 
@@ -83,6 +96,10 @@ def test_load_settings_overrides(monkeypatch, tmp_path):
     assert settings.searxng_base_url == "http://search.local:8888/searxng"
     assert settings.searxng_timeout == 30.0
     assert settings.searxng_user_agent == "test-agent/1.0"
+    assert settings.tinyfish_fallback is False
+    assert settings.tinyfish_base_url == "http://tinyfish.local"
+    assert settings.tinyfish_timeout == 20.0
+    assert settings.tinyfish_env_file == "custom.env"
 
 
 def test_removed_gate_mode_env_is_ignored(monkeypatch):

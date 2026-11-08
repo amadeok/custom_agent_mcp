@@ -16,6 +16,7 @@ from ..searxng import (
     start_instance,
 )
 from ..settings import Settings
+from ..tinyfish import TinyFishClient, TinyFishError
 
 # Web tools touch the network, so they are open-world reads.
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=True)
@@ -23,6 +24,13 @@ READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=True)
 START_LOCAL = ToolAnnotations(idempotent_hint=True, open_world_hint=True)
 
 TimeRange = Literal["day", "week", "month", "year"]
+Provider = Literal["auto", "searxng", "tinyfish"]
+
+
+def _searxng_error_message(message: str, settings: Settings) -> str:
+    if settings.searxng_start_cmd and "Could not reach" in message:
+        return f"{message} Call start_searxng to launch the local instance."
+    return message
 
 
 def register_web_tools(
@@ -40,32 +48,82 @@ def register_web_tools(
         time_range: TimeRange | None = None,
         safesearch: int = 0,
         instance_url: str | None = None,
+        provider: Provider = "auto",
     ) -> dict[str, Any]:
-        """Search the web through a SearXNG instance.
+        """Search the web through SearXNG, TinyFish, or both.
 
         Returns titles, URLs, snippets, engines, answers, suggestions, and
         instance metadata. The default instance is SEARXNG_MCP_BASE_URL
         (http://127.0.0.1:8888); pass instance_url to override it for one call.
         Use web_fetch when a snippet is not enough.
 
-        categories and engines are lists of SearXNG category or engine names.
-        time_range limits results to day, week, month, or year. safesearch is
-        0 (off), 1 (moderate), or 2 (strict).
+        provider selects the search method: "auto" (default) queries SearXNG and
+        retries through TinyFish when SearXNG is unreachable, errors, or returns
+        no results; "searxng" uses only SearXNG; "tinyfish" uses only TinyFish.
+        TinyFish needs TINYFISH_API_KEY in the environment or .env (free tier).
+        A fallback result reports fallback_used=true and fallback_reason.
+        Fallback is skipped when categories, engines, or an explicit
+        instance_url is given, and when TINYFISH_MCP_FALLBACK=false.
+
+        categories and engines are lists of SearXNG category or engine names and
+        are not supported by provider="tinyfish". time_range limits results to
+        day, week, month, or year. safesearch is 0 (off), 1 (moderate), or 2
+        (strict); TinyFish has no safesearch filter, so it is ignored there.
         """
         if len(query or "") > 2000:
             raise ValueError("query must be at most 2000 characters")
+        if provider not in ("auto", "searxng", "tinyfish"):
+            raise ValueError("provider must be 'auto', 'searxng', or 'tinyfish'")
+        explicit_instance = bool(instance_url and instance_url.strip())
+
+        if provider == "tinyfish":
+            if categories or engines:
+                raise ValueError(
+                    "provider='tinyfish' does not support categories or engines"
+                )
+            if explicit_instance:
+                raise ValueError("instance_url is only supported by SearXNG")
+            return TinyFishClient(
+                settings.tinyfish_base_url,
+                timeout=settings.tinyfish_timeout,
+                env_file=settings.tinyfish_env_file or None,
+            ).search(
+                query,
+                max_results=max_results,
+                pageno=pageno,
+                time_range=time_range,
+                safesearch=safesearch,
+                language=language,
+            )
+
         base_url = (
-            instance_url.strip()
-            if instance_url and instance_url.strip()
-            else settings.searxng_base_url
+            instance_url.strip() if explicit_instance else settings.searxng_base_url
         )
         client = SearxngClient(
             base_url,
             timeout=settings.searxng_timeout,
             user_agent=settings.searxng_user_agent,
         )
+        fallback: TinyFishClient | None = None
+        allow_fallback = False
+        if provider == "auto":
+            fallback = TinyFishClient(
+                settings.tinyfish_base_url,
+                timeout=settings.tinyfish_timeout,
+                env_file=settings.tinyfish_env_file or None,
+            )
+            allow_fallback = (
+                settings.tinyfish_fallback
+                and fallback.available
+                and not explicit_instance
+                and not categories
+                and not engines
+            )
+
+        searxng_error: str | None = None
+        result: dict[str, Any] | None = None
         try:
-            return client.search(
+            result = client.search(
                 query,
                 max_results=max_results,
                 categories=categories,
@@ -76,11 +134,48 @@ def register_web_tools(
                 safesearch=safesearch,
             )
         except SearxngError as exc:
-            if settings.searxng_start_cmd and "Could not reach" in str(exc):
+            if not allow_fallback:
                 raise SearxngError(
-                    f"{exc} Call start_searxng to launch the local instance."
+                    _searxng_error_message(str(exc), settings)
                 ) from exc
-            raise
+            searxng_error = _searxng_error_message(str(exc), settings)
+
+        if result is not None:
+            if result["results"] or not allow_fallback:
+                result.setdefault("provider", "searxng")
+                return result
+            fallback_reason = "no_results"
+        else:
+            fallback_reason = "searxng_error"
+
+        assert fallback is not None
+        try:
+            fallback_result = fallback.search(
+                query,
+                max_results=max_results,
+                pageno=pageno,
+                time_range=time_range,
+                safesearch=safesearch,
+                language=language,
+            )
+        except TinyFishError as exc:
+            if result is None:
+                raise SearxngError(
+                    f"{searxng_error} TinyFish fallback failed: {exc}"
+                ) from exc
+            # SearXNG answered but found nothing and the fallback failed; return
+            # the empty SearXNG result with the fallback failure attached.
+            result.setdefault("provider", "searxng")
+            result["fallback_attempted"] = True
+            result["fallback_error"] = str(exc)
+            return result
+
+        fallback_result["fallback_used"] = True
+        fallback_result["fallback_reason"] = fallback_reason
+        fallback_result["searxng_instance"] = settings.searxng_base_url
+        if searxng_error is not None:
+            fallback_result["searxng_error"] = searxng_error
+        return fallback_result
 
     @mcp.tool(annotations=READ_ONLY)
     @tool_errors

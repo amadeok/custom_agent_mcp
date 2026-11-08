@@ -133,6 +133,11 @@ Or use `/mcps` inside OpenCode.
 | `SEARXNG_MCP_USER_AGENT` | `custom-agent-mcp/0.1 (SearXNG client)` | User-Agent sent to SearXNG and fetched pages |
 | `SEARXNG_MCP_START_CMD` | *(empty)* | Launcher that starts a local instance; enables the `start_searxng` tool |
 | `SEARXNG_MCP_START_TIMEOUT` | `90` | Seconds allowed for the launcher to finish |
+| `TINYFISH_API_KEY` | *(empty)* | TinyFish Search key; enables the `web_search` fallback. Also read from `.env` in the server's working directory |
+| `TINYFISH_MCP_FALLBACK` | `true` | Retry `web_search` through TinyFish when SearXNG errors or returns no results |
+| `TINYFISH_MCP_BASE_URL` | `https://api.search.tinyfish.ai` | TinyFish Search endpoint |
+| `TINYFISH_MCP_TIMEOUT` | `15` | TinyFish HTTP timeout in seconds |
+| `TINYFISH_MCP_ENV_FILE` | `<cwd>/.env` | Env file used to resolve `TINYFISH_API_KEY` when the variable is unset |
 
 ## Tools
 
@@ -148,7 +153,7 @@ Observation and web tools are always available. Injection tools require `PYFIND_
 | `find_image` | read-only | PyFind PNG/WebP template matching with threshold and wait timeout |
 | `list_templates` | read-only | Available PNG/WebP templates and image dimensions |
 | `reload_templates` | read-only | Clear and rebuild the template cache |
-| `web_search` | read-only, network | Query the configured SearXNG instance; returns titles, URLs, snippets, engines, answers, suggestions, and corrections |
+| `web_search` | read-only, network | Query SearXNG, TinyFish, or auto-fallback between them; returns titles, URLs, snippets, engines, answers, suggestions, and corrections |
 | `web_fetch` | read-only, network | Download an HTTP(S) page and return readable text with inline Markdown links; truncates to `max_chars` |
 | `start_searxng` | local start | Run `SEARXNG_MCP_START_CMD` when the instance is down; returns `already_running`, `started`, `returncode`, and launcher output |
 | `click` | input | Tagged click or move; optional modifiers and `window_title` focus check; restores the pointer afterwards |
@@ -259,18 +264,25 @@ search:
 
 If SearXNG runs locally behind a launcher script, set `SEARXNG_MCP_START_CMD` to that script to register the `start_searxng` tool. It returns immediately when the port is already listening; otherwise it runs the launcher and waits for the instance to accept connections. Success is decided by a TCP probe, not by the exit code, because a broken launcher also exits 0.
 
+### SearXNG and TinyFish
+
+`web_search` exposes both search methods. `provider="auto"` (default) queries SearXNG and retries once through [TinyFish Search](https://docs.tinyfish.ai/search-api/reference) when SearXNG is unreachable, returns an HTTP error, or answers with zero results. `provider="searxng"` uses only SearXNG; `provider="tinyfish"` uses only TinyFish. TinyFish is free up to 12,000 searches/day (30/minute) and needs a key; set `TINYFISH_API_KEY`, or put it in `.env` next to the server (the file is read on each call, so a key added later needs no restart). An explicit `TINYFISH_MCP_ENV_FILE` overrides the `.env` path.
+
+Automatic fallback is skipped when `categories`, `engines`, or an explicit `instance_url` is passed, because those filters cannot be honored, and when `TINYFISH_MCP_FALLBACK=false`. A fallback result sets `fallback_used=true`, `fallback_reason` (`searxng_error` or `no_results`), `searxng_instance`, and `searxng_error` when SearXNG failed. `provider="tinyfish"` rejects `categories`, `engines`, and `instance_url`. TinyFish has no safesearch filter, and its pagination stops at page 11.
+
 `web_search` accepts:
 
 | Parameter | Default | Meaning |
 |---|---|---|
 | `query` | required | Search terms, at most 2000 characters |
+| `provider` | `auto` | `auto` (SearXNG then TinyFish), `searxng`, or `tinyfish` |
 | `max_results` | `10` | Results to return, 1-50 |
 | `categories` | none | SearXNG categories such as `general`, `news`, `images` |
 | `engines` | none | SearXNG engine names such as `duckduckgo`, `brave` |
-| `language` | `auto` | SearXNG language code, for example `en-US` |
-| `pageno` | `1` | Result page, 1-20 |
+| `language` | `auto` | Language code, for example `en-US`; TinyFish receives the primary subtag |
+| `pageno` | `1` | Result page, 1-20 (TinyFish stops at 11) |
 | `time_range` | none | `day`, `week`, `month`, or `year` |
-| `safesearch` | `0` | `0` off, `1` moderate, `2` strict |
+| `safesearch` | `0` | `0` off, `1` moderate, `2` strict (SearXNG only) |
 | `instance_url` | configured URL | Override the SearXNG base URL for this call |
 
 The result contains `results` (title, URL, snippet, engine, score, category, published date), plus `answers`, `infoboxes`, `suggestions`, `corrections`, and `unresponsive_engines` when the instance provides them.

@@ -6,6 +6,7 @@ from typing import Callable, ParamSpec, TypeVar
 from mcp.server.mcpserver.exceptions import ToolError
 
 from .exceptions import PyFindRuntimeError, SearxngError
+from .tinyfish import TinyFishError
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -24,7 +25,7 @@ def tool_errors(fn: Callable[P, R]) -> Callable[P, R]:
             return fn(*args, **kwargs)
         except ToolError:
             raise
-        except (PyFindRuntimeError, SearxngError, ValueError, OSError) as exc:
+        except (PyFindRuntimeError, SearxngError, TinyFishError, ValueError, OSError) as exc:
             raise ToolError(str(exc)) from exc
 
     return wrapper

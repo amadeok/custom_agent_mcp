@@ -11,6 +11,7 @@ from .searxng import (
     DEFAULT_TIMEOUT,
     DEFAULT_USER_AGENT,
 )
+from .tinyfish import DEFAULT_TINYFISH_URL
 
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
@@ -86,6 +87,10 @@ class Settings:
     searxng_user_agent: str = DEFAULT_USER_AGENT
     searxng_start_cmd: str = ""
     searxng_start_timeout: float = DEFAULT_START_TIMEOUT
+    tinyfish_fallback: bool = True
+    tinyfish_base_url: str = DEFAULT_TINYFISH_URL
+    tinyfish_timeout: float = DEFAULT_TIMEOUT
+    tinyfish_env_file: str = ""
 
 
 def _default_input_gate_hotkey() -> str:
@@ -139,4 +144,12 @@ def load_settings() -> Settings:
         searxng_start_timeout=_env_float(
             "SEARXNG_MCP_START_TIMEOUT", DEFAULT_START_TIMEOUT, 1.0, 300.0
         ),
+        tinyfish_fallback=_env_bool("TINYFISH_MCP_FALLBACK", True),
+        tinyfish_base_url=(
+            os.getenv("TINYFISH_MCP_BASE_URL", "").strip() or DEFAULT_TINYFISH_URL
+        ),
+        tinyfish_timeout=_env_float(
+            "TINYFISH_MCP_TIMEOUT", DEFAULT_TIMEOUT, 1.0, 120.0
+        ),
+        tinyfish_env_file=os.getenv("TINYFISH_MCP_ENV_FILE", "").strip(),
     )

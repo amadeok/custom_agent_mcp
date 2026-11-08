@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+.env
 build/
 dist/
 templates/*.png

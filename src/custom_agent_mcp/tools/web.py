@@ -6,6 +6,7 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 from ..errors import tool_errors
+from ..exceptions import SearxngError
 from ..searxng import (
     DEFAULT_PAGE_CHARS,
     MAX_PAGE_CHARS,
@@ -44,7 +45,7 @@ def register_web_tools(
 
         Returns titles, URLs, snippets, engines, answers, suggestions, and
         instance metadata. The default instance is SEARXNG_MCP_BASE_URL
-        (http://127.0.0.1:8080); pass instance_url to override it for one call.
+        (http://127.0.0.1:8888); pass instance_url to override it for one call.
         Use web_fetch when a snippet is not enough.
 
         categories and engines are lists of SearXNG category or engine names.
@@ -63,16 +64,23 @@ def register_web_tools(
             timeout=settings.searxng_timeout,
             user_agent=settings.searxng_user_agent,
         )
-        return client.search(
-            query,
-            max_results=max_results,
-            categories=categories,
-            engines=engines,
-            language=language,
-            pageno=pageno,
-            time_range=time_range,
-            safesearch=safesearch,
-        )
+        try:
+            return client.search(
+                query,
+                max_results=max_results,
+                categories=categories,
+                engines=engines,
+                language=language,
+                pageno=pageno,
+                time_range=time_range,
+                safesearch=safesearch,
+            )
+        except SearxngError as exc:
+            if settings.searxng_start_cmd and "Could not reach" in str(exc):
+                raise SearxngError(
+                    f"{exc} Call start_searxng to launch the local instance."
+                ) from exc
+            raise
 
     @mcp.tool(annotations=READ_ONLY)
     @tool_errors

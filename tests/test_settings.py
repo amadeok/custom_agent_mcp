@@ -21,6 +21,8 @@ def test_load_settings_defaults(monkeypatch):
         "SEARXNG_MCP_BASE_URL",
         "SEARXNG_MCP_TIMEOUT",
         "SEARXNG_MCP_USER_AGENT",
+        "SEARXNG_MCP_START_CMD",
+        "SEARXNG_MCP_START_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -38,9 +40,11 @@ def test_load_settings_defaults(monkeypatch):
     assert settings.max_workers == 2
     assert settings.threshold == 0.8
     assert settings.log_level == "WARNING"
-    assert settings.searxng_base_url == "http://127.0.0.1:8080"
+    assert settings.searxng_base_url == "http://127.0.0.1:8888"
     assert settings.searxng_timeout == 15.0
     assert settings.searxng_user_agent.startswith("custom-agent-mcp/")
+    assert settings.searxng_start_cmd == ""
+    assert settings.searxng_start_timeout == 90.0
 
 
 def test_load_settings_overrides(monkeypatch, tmp_path):

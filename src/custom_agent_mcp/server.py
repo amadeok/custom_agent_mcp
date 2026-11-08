@@ -41,7 +41,7 @@ negative x or y values. A rectangle is {x, y, width, height}. Use at most one of
 window_title, monitor, or region in a call.
 
 SearXNG web tools are always available. web_search queries the configured
-instance (SEARXNG_MCP_BASE_URL, default http://127.0.0.1:8080) and returns
+instance (SEARXNG_MCP_BASE_URL, default http://127.0.0.1:8888) and returns
 titles, URLs, snippets, answers, and engine metadata. web_fetch downloads an
 HTTP(S) page and returns readable text with inline Markdown links, truncated
 to max_chars. Use web_search for current or externally verifiable information,

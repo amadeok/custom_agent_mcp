@@ -79,7 +79,7 @@ OpenCode V2 stores MCP servers under `mcp.servers`. A working global entry looks
           "PYFIND_MCP_WEBP_QUALITY": "90",
           "PYFIND_MCP_WEBP_LOSSLESS": "false",
           "PYFIND_MCP_LOG_LEVEL": "WARNING",
-          "SEARXNG_MCP_BASE_URL": "http://127.0.0.1:8080",
+          "SEARXNG_MCP_BASE_URL": "http://127.0.0.1:8888",
           "SEARXNG_MCP_TIMEOUT": "15",
           "SEARXNG_MCP_USER_AGENT": "custom-agent-mcp/0.1 (SearXNG client)"
         },
@@ -128,9 +128,11 @@ Or use `/mcps` inside OpenCode.
 | `PYFIND_MCP_PREVIEW_MAX_WIDTH` | `1600` | Longest preview dimension returned as MCP image content |
 | `PYFIND_MCP_MAX_OUTPUT_FILES` | `100` | Number of saved screenshots kept in the output directory |
 | `PYFIND_MCP_LOG_LEVEL` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL` |
-| `SEARXNG_MCP_BASE_URL` | `http://127.0.0.1:8080` | SearXNG base URL; `/search` is appended (a trailing `/search` is stripped) |
+| `SEARXNG_MCP_BASE_URL` | `http://127.0.0.1:8888` | SearXNG base URL; `/search` is appended (a trailing `/search` is stripped) |
 | `SEARXNG_MCP_TIMEOUT` | `15` | HTTP timeout in seconds for `web_search` and `web_fetch` |
 | `SEARXNG_MCP_USER_AGENT` | `custom-agent-mcp/0.1 (SearXNG client)` | User-Agent sent to SearXNG and fetched pages |
+| `SEARXNG_MCP_START_CMD` | *(empty)* | Launcher that starts a local instance; enables the `start_searxng` tool |
+| `SEARXNG_MCP_START_TIMEOUT` | `90` | Seconds allowed for the launcher to finish |
 
 ## Tools
 
@@ -148,6 +150,7 @@ Observation and web tools are always available. Injection tools require `PYFIND_
 | `reload_templates` | read-only | Clear and rebuild the template cache |
 | `web_search` | read-only, network | Query the configured SearXNG instance; returns titles, URLs, snippets, engines, answers, suggestions, and corrections |
 | `web_fetch` | read-only, network | Download an HTTP(S) page and return readable text with inline Markdown links; truncates to `max_chars` |
+| `start_searxng` | local start | Run `SEARXNG_MCP_START_CMD` when the instance is down; returns `already_running`, `started`, `returncode`, and launcher output |
 | `click` | input | Tagged click or move; optional modifiers and `window_title` focus check; restores the pointer afterwards |
 | `move_mouse` | input | Move the pointer to absolute coordinates (leaves it there) |
 | `move_mouse_by` | input | Move the pointer by an exact pixel offset (leaves it there) |
@@ -245,7 +248,7 @@ Mask templates, directories of templates, and multi-scale matching are not suppo
 
 ## Web search (SearXNG)
 
-`web_search` and `web_fetch` are always registered and do not depend on PyFind or loge2. Point the server at a SearXNG instance with `SEARXNG_MCP_BASE_URL` (default `http://127.0.0.1:8080`). The instance must expose its JSON API; add `json` to `search.formats` in SearXNG's `settings.yml` and restart it:
+`web_search` and `web_fetch` are always registered and do not depend on PyFind or loge2. Point the server at a SearXNG instance with `SEARXNG_MCP_BASE_URL` (default `http://127.0.0.1:8888`). The instance must expose its JSON API; add `json` to `search.formats` in SearXNG's `settings.yml` and restart it:
 
 ```yaml
 search:
@@ -253,6 +256,8 @@ search:
     - html
     - json
 ```
+
+If SearXNG runs locally behind a launcher script, set `SEARXNG_MCP_START_CMD` to that script to register the `start_searxng` tool. It returns immediately when the port is already listening; otherwise it runs the launcher and waits for the instance to accept connections. Success is decided by a TCP probe, not by the exit code, because a broken launcher also exits 0.
 
 `web_search` accepts:
 

@@ -10,7 +10,7 @@ There are two ways to reach the same code, and this script shows both:
   spawning one.
 
 The SearXNG instance comes from ``SEARXNG_MCP_BASE_URL`` (default
-``http://127.0.0.1:8080``), the same variable the MCP server reads.
+``http://127.0.0.1:8888``), the same variable the MCP server reads.
 
 Examples
 --------

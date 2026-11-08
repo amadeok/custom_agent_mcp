@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -15,6 +16,7 @@ from custom_agent_mcp.searxng import (
     fetch_page,
     normalize_base_url,
     normalize_page_url,
+    start_instance,
 )
 from custom_agent_mcp.server import create_server
 from custom_agent_mcp.settings import Settings
@@ -135,8 +137,8 @@ def web_server(monkeypatch):
 
 
 def test_normalize_base_url_strips_search_and_slashes():
-    assert normalize_base_url("http://127.0.0.1:8080/") == "http://127.0.0.1:8080"
-    assert normalize_base_url("http://127.0.0.1:8080/search/") == "http://127.0.0.1:8080"
+    assert normalize_base_url("http://127.0.0.1:8888/") == "http://127.0.0.1:8888"
+    assert normalize_base_url("http://127.0.0.1:8888/search/") == "http://127.0.0.1:8888"
     assert (
         normalize_base_url("https://search.example/searxng/")
         == "https://search.example/searxng"
@@ -149,7 +151,7 @@ def test_normalize_base_url_strips_search_and_slashes():
 
 @pytest.mark.parametrize(
     "value",
-    ["", "127.0.0.1:8080", "ftp://example.com", "http:///missing-host"],
+    ["", "127.0.0.1:8888", "ftp://example.com", "http:///missing-host"],
 )
 def test_normalize_base_url_rejects_invalid_values(value):
     with pytest.raises(ValueError):
@@ -254,6 +256,39 @@ def test_search_html_response_mentions_json(web_server):
 def test_search_unreachable_instance_raises():
     with pytest.raises(SearxngError, match="Could not reach"):
         SearxngClient("http://127.0.0.1:1", timeout=1).search("x")
+
+
+def test_start_instance_requires_a_command():
+    with pytest.raises(ValueError, match="SEARXNG_MCP_START_CMD"):
+        start_instance("http://127.0.0.1:1", "  ")
+
+
+def test_start_instance_skips_the_launcher_when_already_listening():
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    try:
+        result = start_instance(
+            f"http://127.0.0.1:{port}",
+            "this-command-must-not-run",
+        )
+    finally:
+        listener.close()
+
+    assert result["already_running"] is True
+    assert result["started"] is False
+    assert result["returncode"] is None
+
+
+def test_start_instance_reports_a_launcher_that_starts_nothing():
+    with pytest.raises(SearxngError, match="not accepting connections"):
+        start_instance(
+            "http://127.0.0.1:1",
+            "exit 0",
+            timeout=10,
+            wait=0.5,
+        )
 
 
 def test_fetch_page_extracts_readable_html(web_server):

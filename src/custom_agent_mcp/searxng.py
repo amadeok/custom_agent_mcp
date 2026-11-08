@@ -12,6 +12,7 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -25,7 +26,7 @@ from loguru import logger
 
 from .exceptions import SearxngError
 
-DEFAULT_SEARXNG_URL = "http://127.0.0.1:8080"
+DEFAULT_SEARXNG_URL = "http://127.0.0.1:8888"
 DEFAULT_USER_AGENT = "custom-agent-mcp/0.1 (SearXNG client)"
 DEFAULT_TIMEOUT = 15.0
 DEFAULT_START_TIMEOUT = 90.0
@@ -592,11 +593,20 @@ class SearxngClient:
             params.append(("time_range", time_range))
         url = f"{self.search_url}?{urllib.parse.urlencode(params)}"
 
-        response = _http_get(
-            url,
-            timeout=self.timeout,
-            user_agent=self.user_agent,
-        )
+        try:
+            response = _http_get(
+                url,
+                timeout=self.timeout,
+                user_agent=self.user_agent,
+            )
+        except SearxngError as exc:
+            message = str(exc)
+            if message.startswith("Could not reach"):
+                raise SearxngError(
+                    f"{message} Is SearXNG running on {self.base_url}? Set "
+                    "SEARXNG_MCP_BASE_URL to the instance's real address."
+                ) from exc
+            raise
         if response.truncated:
             raise SearxngError(
                 f"SearXNG search response exceeded {MAX_DOWNLOAD_BYTES} bytes."
@@ -730,32 +740,39 @@ def start_instance(
             )
 
         creationflags = _CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        try:
-            completed = subprocess.run(
-                ["cmd", "/c", command],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                creationflags=creationflags,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise SearxngError(
-                f"Starting SearXNG with {command!r} timed out after {timeout:g}s."
-            ) from exc
-        except OSError as exc:
-            raise SearxngError(f"Could not run {command!r}: {exc}") from exc
+        # A pipe would deadlock: the launcher detaches a grandchild that keeps
+        # the write end open, so reading to EOF never finishes. A temporary file
+        # lets us capture output without waiting for the whole process tree.
+        with tempfile.TemporaryFile(mode="w+b") as sink:
+            try:
+                process = subprocess.Popen(
+                    ["cmd", "/c", command],
+                    stdin=subprocess.DEVNULL,
+                    stdout=sink,
+                    stderr=subprocess.STDOUT,
+                    creationflags=creationflags,
+                )
+            except OSError as exc:
+                raise SearxngError(f"Could not run {command!r}: {exc}") from exc
 
-        output = "\n".join(
-            part.strip()
-            for part in (completed.stdout, completed.stderr)
-            if part and part.strip()
-        )
+            try:
+                returncode = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+                process.kill()
+                process.wait()
+                raise SearxngError(
+                    f"Starting SearXNG with {command!r} timed out after {timeout:g}s."
+                ) from exc
+
+            sink.seek(0)
+            output = sink.read().decode("utf-8", errors="replace").strip()
+
         if len(output) > 2000:
             output = output[:2000] + "..."
 
         if not _wait_until_listening(base, wait):
             raise SearxngError(
-                f"{command!r} exited with code {completed.returncode} but {base} "
+                f"{command!r} exited with code {returncode} but {base} "
                 f"is not accepting connections. Output: {output or '(none)'}"
             )
 
@@ -763,6 +780,6 @@ def start_instance(
             base,
             already_running=False,
             started=True,
-            returncode=completed.returncode,
+            returncode=returncode,
             output=output,
         )

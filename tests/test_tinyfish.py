@@ -14,9 +14,9 @@ from mcp import Client
 
 from custom_agent_mcp.exceptions import SearxngError
 from custom_agent_mcp.searxng import SearxngClient
-from custom_agent_mcp.server import create_server
 from custom_agent_mcp.settings import Settings
 from custom_agent_mcp.tinyfish import TinyFishClient, TinyFishError, load_api_key
+from custom_agent_mcp.web_server import create_web_server
 
 PAYLOAD = {
     "query": "test",
@@ -202,7 +202,7 @@ def _result(title: str, url: str) -> dict:
 
 
 def _call_web_search(settings: Settings, **arguments) -> object:
-    server = create_server(settings)
+    server = create_web_server(settings)
 
     async def call():
         async with Client(server) as client:

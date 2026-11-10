@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "custom-agent-mcp"
 version = "0.1.0"
-description = "MCP server for local Windows automation and SearXNG web research"
+description = "MCP servers for local Windows automation and SearXNG web research"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -22,6 +22,7 @@ dev = [
 
 [project.scripts]
 custom-agent-mcp = "custom_agent_mcp.__main__:main"
+custom-agent-websearch-mcp = "custom_agent_mcp.web_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

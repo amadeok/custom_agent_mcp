@@ -1,11 +1,11 @@
-"""Call the PyFind web tools from a plain Python script, without OpenCode.
+"""Call the web search tools from a plain Python script, without OpenCode.
 
 There are two ways to reach the same code, and this script shows both:
 
 * direct (default) - import ``custom_agent_mcp.searxng`` and call it. No MCP
   handshake, no server process, no extra dependency beyond ``loguru``.
-* ``--mcp`` - spawn ``python -m custom_agent_mcp`` over stdio and call the
-  ``web_search`` / ``web_fetch`` tools exactly like OpenCode does. Add
+* ``--mcp`` - spawn ``python -m custom_agent_mcp.web_server`` over stdio and
+  call the ``web_search`` / ``web_fetch`` tools exactly like OpenCode does. Add
   ``--url`` to attach to an already running streamable-HTTP server instead of
   spawning one.
 
@@ -137,7 +137,7 @@ async def run_mcp(
         # Pass the environment through so the child sees SEARXNG_MCP_BASE_URL.
         target = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "custom_agent_mcp"],
+            args=["-m", "custom_agent_mcp.web_server"],
             env=dict(os.environ),
         )
 
@@ -167,7 +167,7 @@ async def run_mcp(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="web_tools_demo",
-        description="Search and fetch through the PyFind web tools.",
+        description="Search and fetch through the web search MCP server.",
     )
     parser.add_argument("query", help="search query")
     parser.add_argument(

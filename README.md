@@ -1,15 +1,15 @@
 # custom-agent-mcp
 
-A local [Model Context Protocol](https://modelcontextprotocol.io/) server for Windows automation and web research. The PyFind capability set exposes screen capture, Windows OCR, and template matching from the local screen-automation package in `F:\all\GitHub\autopy2`. Optional input tools use loge2 (`F:\all\GitHub\loge2`) to block physical keyboard/mouse input with global hooks while injecting tagged keyboard and mouse events through the block. The SearXNG capability adds `web_search` and `web_fetch`: searches go through a SearXNG JSON API, and fetched HTML is converted to readable text for the agent.
+A pair of local [Model Context Protocol](https://modelcontextprotocol.io/) servers: one for Windows automation and one for web research. The PyFind server exposes screen capture, Windows OCR, and template matching from the local screen-automation package in `F:\all\GitHub\autopy2`. Optional input tools use loge2 (`F:\all\GitHub\loge2`) to block physical keyboard/mouse input with global hooks while injecting tagged keyboard and mouse events through the block. The `websearch` server adds `web_search`, `web_fetch`, and an optional `start_searxng`: searches go through a SearXNG JSON API (with TinyFish as a fallback), and fetched HTML is converted to readable text for the agent.
 
-The server keeps one `PyFinder` instance alive for its whole lifetime. The first screen tool call pays the PyFind process-pool startup cost; later calls reuse the warm pool and template cache.
+The PyFind server keeps one `PyFinder` instance alive for its whole lifetime. The first screen tool call pays the PyFind process-pool startup cost; later calls reuse the warm pool and template cache. The `websearch` server is independent: it does not import PyFind or loge2 and can run when only web research is needed.
 
 ## Requirements
 
 - Windows 10/11
 - Python 3.11+ (this machine uses Python 3.13)
-- PyFind installed in the same interpreter, normally editable from `F:\all\GitHub\autopy2`
-- loge2 installed in the same interpreter for input and blocking, normally editable from `F:\all\GitHub\loge2`
+- PyFind installed in the same interpreter, normally editable from `F:\all\GitHub\autopy2` (PyFind server only)
+- loge2 installed in the same interpreter for input and blocking, normally editable from `F:\all\GitHub\loge2` (PyFind server only)
 - The MCP Python SDK v2 (`mcp>=2.3,<3`)
 - A reachable SearXNG instance with JSON output enabled for `web_search`; `web_fetch` only needs network access (the web tools add no Python dependency)
 
@@ -42,17 +42,25 @@ python -m pip install -e ".[dev]"
 pytest
 ```
 
-The server entry point is:
+The PyFind server entry point is:
 
 ```powershell
 python -m custom_agent_mcp
 ```
 
-It speaks MCP over stdio. It does not print a banner.
+The web search server entry point is:
+
+```powershell
+python -m custom_agent_mcp.web_server
+# or the installed console script:
+custom-agent-websearch-mcp
+```
+
+Both speak MCP over stdio. They do not print a banner.
 
 ## OpenCode configuration
 
-OpenCode V2 stores MCP servers under `mcp.servers`. A working global entry looks like this:
+OpenCode V2 stores MCP servers under `mcp.servers`. Register the two servers separately so the desktop and web tool sets are independent:
 
 ```jsonc
 {
@@ -78,10 +86,30 @@ OpenCode V2 stores MCP servers under `mcp.servers`. A working global entry looks
           "PYFIND_MCP_IMAGE_FORMAT": "png",
           "PYFIND_MCP_WEBP_QUALITY": "90",
           "PYFIND_MCP_WEBP_LOSSLESS": "false",
-          "PYFIND_MCP_LOG_LEVEL": "WARNING",
+          "PYFIND_MCP_LOG_LEVEL": "WARNING"
+        },
+        "codemode": false,
+        "timeout": {
+          "startup": 45000,
+          "catalog": 30000,
+          "execution": 300000
+        }
+      },
+      "websearch": {
+        "type": "local",
+        "command": [
+          "C:\\Users\\amade\\AppData\\Local\\Python\\pythoncore-3.13-64\\python.exe",
+          "-m",
+          "custom_agent_mcp.web_server"
+        ],
+        "cwd": "F:\\all\\GitHub\\custom_agent_mcp",
+        "environment": {
           "SEARXNG_MCP_BASE_URL": "http://127.0.0.1:8888",
           "SEARXNG_MCP_TIMEOUT": "15",
-          "SEARXNG_MCP_USER_AGENT": "custom-agent-mcp/0.1 (SearXNG client)"
+          "SEARXNG_MCP_USER_AGENT": "custom-agent-mcp/0.1 (SearXNG client)",
+          // Optional: enables the start_searxng tool.
+          "SEARXNG_MCP_START_CMD": "C:\\Users\\amade\\Apps\\searxng-windows\\start-searxng.cmd",
+          "SEARXNG_MCP_START_TIMEOUT": "90"
         },
         "codemode": false,
         "timeout": {
@@ -95,9 +123,9 @@ OpenCode V2 stores MCP servers under `mcp.servers`. A working global entry looks
 }
 ```
 
-Set both `PYFIND_MCP_ALLOW_INPUT` and `PYFIND_MCP_ALLOW_INPUT_GATE` to `"true"` to expose the injection and blocking tools, then restart OpenCode or reconnect the MCP server. The gate requires input tools because its purpose is to let this server inject while physical input is blocked.
+Set both `PYFIND_MCP_ALLOW_INPUT` and `PYFIND_MCP_ALLOW_INPUT_GATE` to `"true"` to expose the injection and blocking tools, then restart OpenCode or reconnect the MCP server. The gate requires input tools because its purpose is to let the PyFind server inject while physical input is blocked. The `websearch` entry has no PyFind settings and can be enabled on its own.
 
-`codemode: false` exposes the tools directly as `pyfind_screenshot`, `pyfind_ocr`, `pyfind_find_image`, `pyfind_web_search`, and so on. Ordered input batching does not require Code Mode: call `run_commands` directly with a JSON list of commands. With Code Mode enabled, call it through `execute` as `tools.pyfind.run_commands(...)`.
+`codemode: false` exposes the PyFind tools directly as `pyfind_screenshot`, `pyfind_ocr`, `pyfind_find_image`, and so on, and the web tools as `websearch_web_search`, `websearch_web_fetch`, and `websearch_start_searxng`. Ordered input batching does not require Code Mode: call `pyfind_run_commands` directly with a JSON list of commands. With Code Mode enabled, call it through `execute` as `tools.pyfind.run_commands(...)` and the web tools as `tools.websearch.web_search(...)`.
 
 After editing the config, check the connection:
 
@@ -108,6 +136,8 @@ opencode mcp list
 Or use `/mcps` inside OpenCode.
 
 ## Environment variables
+
+`PYFIND_MCP_*` variables configure the PyFind server. `SEARXNG_MCP_*` and `TINYFISH_*` variables configure the websearch server. `PYFIND_MCP_LOG_LEVEL` is read by both servers; leave the websearch entry with the default when you do not need web search debug logs.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -127,7 +157,7 @@ Or use `/mcps` inside OpenCode.
 | `PYFIND_MCP_MAX_TIMEOUT` | `120` | Maximum wait timeout accepted by a tool |
 | `PYFIND_MCP_PREVIEW_MAX_WIDTH` | `1600` | Longest preview dimension returned as MCP image content |
 | `PYFIND_MCP_MAX_OUTPUT_FILES` | `100` | Number of saved screenshots kept in the output directory |
-| `PYFIND_MCP_LOG_LEVEL` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL` |
+| `PYFIND_MCP_LOG_LEVEL` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL` (both servers) |
 | `SEARXNG_MCP_BASE_URL` | `http://127.0.0.1:8888` | SearXNG base URL; `/search` is appended (a trailing `/search` is stripped) |
 | `SEARXNG_MCP_TIMEOUT` | `15` | HTTP timeout in seconds for `web_search` and `web_fetch` |
 | `SEARXNG_MCP_USER_AGENT` | `custom-agent-mcp/0.1 (SearXNG client)` | User-Agent sent to SearXNG and fetched pages |
@@ -141,7 +171,7 @@ Or use `/mcps` inside OpenCode.
 
 ## Tools
 
-Observation and web tools are always available. Injection tools require `PYFIND_MCP_ALLOW_INPUT=true`; blocking tools additionally require `PYFIND_MCP_ALLOW_INPUT_GATE=true`. `run_commands` is always registered, but it can only queue tools that are registered in the same server.
+The PyFind server registers observation, find, batch, and optional input tools. The websearch server registers only `web_search`, `web_fetch`, and the optional `start_searxng`. Injection tools require `PYFIND_MCP_ALLOW_INPUT=true`; blocking tools additionally require `PYFIND_MCP_ALLOW_INPUT_GATE=true`. `run_commands` is always registered in the PyFind server, but it can only queue tools registered in that server.
 
 | Tool | Access | Description |
 |---|---|---|
@@ -153,9 +183,6 @@ Observation and web tools are always available. Injection tools require `PYFIND_
 | `find_image` | read-only | PyFind PNG/WebP template matching with threshold and wait timeout |
 | `list_templates` | read-only | Available PNG/WebP templates and image dimensions |
 | `reload_templates` | read-only | Clear and rebuild the template cache |
-| `web_search` | read-only, network | Query SearXNG, TinyFish, or auto-fallback between them; returns titles, URLs, snippets, engines, answers, suggestions, and corrections |
-| `web_fetch` | read-only, network | Download an HTTP(S) page and return readable text with inline Markdown links; truncates to `max_chars` |
-| `start_searxng` | local start | Run `SEARXNG_MCP_START_CMD` when the instance is down; returns `already_running`, `started`, `returncode`, and launcher output |
 | `click` | input | Tagged click or move; optional modifiers and `window_title` focus check; restores the pointer afterwards |
 | `move_mouse` | input | Move the pointer to absolute coordinates (leaves it there) |
 | `move_mouse_by` | input | Move the pointer by an exact pixel offset (leaves it there) |
@@ -203,7 +230,7 @@ A focused queue holds input blocked for its whole duration, including any `sleep
 
 Do not split these commands across separate tool calls. A standalone input call restores focus to the previously focused window after its injection, and between calls the foreground window can change; a later `type_text` may append instead of replace. The whole queue is validated before anything runs, so a typo in a later entry has no side effects. By default a failed command stops the queue and returns the results so far; `continue_on_error=true` keeps going. If a queue blocks input, put `unblock_user_input` last and use `continue_on_error=true` so a failure cannot strand the block. A focused queue already holds the gate for its whole duration; releasing it with a queued gate command opens the block early.
 
-A screenshot or a visual decision ends the queue: inspect the result, then start the next queue. Inside a queue, use `find_text` or `find_image` with `timeout` to wait for UI state instead of sleeping. The queue accepts every registered tool except `screenshot`, `run_commands` itself, and the web tools (`web_search` and `web_fetch`), which are network calls and would hold the input gate closed while they run.
+A screenshot or a visual decision ends the queue: inspect the result, then start the next queue. Inside a queue, use `find_text` or `find_image` with `timeout` to wait for UI state instead of sleeping. The queue accepts every tool registered in the PyFind server except `screenshot` and `run_commands` itself. Web tools live in the separate websearch server and are not queueable here: they are network calls and would hold the input gate closed while they run.
 
 When `press_key` or `type_text` had to take focus, the restore is delayed by `settle` (default 0.2 s) while the gate is still closed. This gives the target time to process the last event before it is deactivated: without it, Chrome can lose a `ctrl+l` when the window had to be refocused and the next call types into the old URL. The delay is skipped when the target already had focus, and when the injection raised. Raise `settle` for slow or heavily loaded applications.
 
@@ -251,9 +278,15 @@ Mask templates, directories of templates, and multi-scale matching are not suppo
 
 `screenshot` writes a full-resolution image to the output directory and returns a downscaled preview as MCP image content. The format is PNG by default; set `PYFIND_MCP_IMAGE_FORMAT=webp` for WebP (with `PYFIND_MCP_WEBP_QUALITY` or `PYFIND_MCP_WEBP_LOSSLESS`). The text block contains the full path, preview path, format, dimensions, capture region, and target. Use the full path as a template source when convenient; lossy WebP can slightly reduce template-match scores, so use lossless WebP or PNG for templates.
 
-## Web search (SearXNG)
+## Web search server (SearXNG)
 
-`web_search` and `web_fetch` are always registered and do not depend on PyFind or loge2. Point the server at a SearXNG instance with `SEARXNG_MCP_BASE_URL` (default `http://127.0.0.1:8888`). The instance must expose its JSON API; add `json` to `search.formats` in SearXNG's `settings.yml` and restart it:
+`web_search` and `web_fetch` live in the separate `websearch` server. Start it with `python -m custom_agent_mcp.web_server` (or `custom-agent-websearch-mcp`) and register it as its own MCP entry. It does not import PyFind or loge2; it only needs the shared settings module and network access. Point it at a SearXNG instance with `SEARXNG_MCP_BASE_URL` (default `http://127.0.0.1:8888`). The instance must expose its JSON API; add `json` to `search.formats` in SearXNG's `settings.yml` and restart it:
+
+| Tool | Access | Description |
+|---|---|---|
+| `web_search` | read-only, network | Query SearXNG, TinyFish, or auto-fallback between them; returns titles, URLs, snippets, engines, answers, suggestions, and corrections |
+| `web_fetch` | read-only, network | Download an HTTP(S) page and return readable text with inline Markdown links; truncates to `max_chars` |
+| `start_searxng` | local start | Run `SEARXNG_MCP_START_CMD` when the instance is down; returns `already_running`, `started`, `returncode`, and launcher output |
 
 ```yaml
 search:
@@ -289,11 +322,11 @@ The result contains `results` (title, URL, snippet, engine, score, category, pub
 
 `web_fetch` downloads one HTTP(S) URL and returns readable text. HTML is converted to plain text with inline Markdown links; scripts, styles, and tags are removed. JSON is pretty-printed, and plain text or XML is returned as-is. PDFs and other binary content are rejected. `max_chars` defaults to 20000 and is capped at 200000; the result reports `char_count`, `truncated`, and `download_truncated`. It does not execute JavaScript, send cookies, or authenticate, so use it for static pages and APIs.
 
-Web tools are deliberately excluded from `run_commands`: a focused queue holds the input gate closed for its whole duration, and a slow remote request would lock the human out. Call them as normal tools instead.
+Web tools are not registered in the PyFind server, and `run_commands` cannot call them: a focused queue holds the input gate closed for its whole duration, and a slow remote request would lock the human out. Call them as normal tools on the websearch server instead.
 
 ## Typical workflow
 
-For web research, call `web_search` first, then `web_fetch` on the most relevant results. The web tools are independent of the desktop workflow below.
+For web research, use the websearch server: call `web_search` first, then `web_fetch` on the most relevant results. The web tools are independent of the desktop workflow below.
 
 1. `list_windows` or `list_monitors` to find the target.
 2. `screenshot` or `ocr` to inspect it. If the model has native vision, prefer
@@ -313,7 +346,7 @@ For web research, call `web_search` first, then `web_fetch` on the most relevant
 - Each injection blocks input only for its own duration. The manual `block_user_input` override can hold the human out continuously; use a bounded `ttl` and call `unblock_user_input` when done. If a run goes wrong, call `end_input_task`/`unblock_user_input` or press the emergency hotkey.
 - The emergency hotkey (`Ctrl+Alt+Shift+F12` by default) releases the gate from physical input only. `Ctrl+Alt+Del` still opens the secure desktop, so Task Manager can end the MCP process if necessary.
 - Global hooks are not a security boundary. Any process that knows loge2's `dwExtraInfo` tag can forge a passthrough event, and elevated windows may ignore injected input because of UIPI.
-- Screen captures may contain passwords, tokens, or private content. Output stays in the local temp directory and is never uploaded by this server.
+- Screen captures may contain passwords, tokens, or private content. Output stays in the local temp directory and is never uploaded by the PyFind server.
 - `web_search` sends the query to the configured SearXNG instance, and `web_fetch` contacts the URL you pass. Do not put secrets in queries, and only fetch sources you trust.
 - `web_fetch` follows redirects and can reach local or private network addresses. Treat it as a general HTTP client, not a sandbox.
 - The agent sees the screen; do not run it against sensitive desktops unattended.
@@ -322,7 +355,7 @@ For web research, call `web_search` first, then `web_fetch` on the most relevant
 
 - Windows only.
 - MSS captures only visible desktop content. Minimized or fully occluded windows cannot be read.
-- `ocr` wraps Windows OCR, whose text and line/word boxes can be approximate; this server does not use PaddleOCR. Vision-capable models should read a `screenshot` instead.
+- `ocr` wraps Windows OCR, whose text and line/word boxes can be approximate; the PyFind server does not use PaddleOCR. Vision-capable models should read a `screenshot` instead.
 - `find_text` uses PyFind's fixed `en-US` Windows OCR path. The `ocr` tool accepts other `lang` values. OCR matches report `confidence: 0.0`; use their rectangles, not the score.
 - `find_image` matches at native scale only. Overlapping matches above the threshold can appear; the output is capped by `max_results`.
 - WebP output reduces file size, not necessarily vision-token cost, which is usually driven by image dimensions. Lossy WebP can lower template-match scores; use PNG or `PYFIND_MCP_WEBP_LOSSLESS=true` for templates. Some MCP clients may not render WebP image content; keep the default PNG if screenshots arrive blank.
@@ -332,7 +365,7 @@ For web research, call `web_search` first, then `web_fetch` on the most relevant
 - Focus is restored after every standalone injection. A selection made by one tool call is not owned by the server and can be lost before a later separate call; queue dependent commands such as `ctrl+a` followed by `type_text` in one `run_commands` call, with `window_title` on the queue. The queue applies the strict focus sequence around the whole list and restores the pre-queue window after the last command.
 - The input gate is global to the interactive desktop session, not per-window. During an injection it blocks the human's input in every application, including OpenCode; between injections input passes through.
 - The PyFind pool costs a few hundred MB and takes a moment on the first screen call.
-- A stuck PyFind worker can hang a tool call; OpenCode's execution timeout returns an error, but reconnecting the server is the clean recovery.
+- A stuck PyFind worker can hang a tool call; OpenCode's execution timeout returns an error, but reconnecting the PyFind server is the clean recovery.
 - `web_search` needs SearXNG's JSON API. If `search.formats` does not include `json`, the instance returns HTTP 403 and the tool reports a hint.
 - `web_fetch` reads static HTML, text, JSON, and XML only. It does not run JavaScript, keep cookies, log in, or extract PDFs and other binary files.
 - HTML-to-text conversion is heuristic. Navigation, cookie banners, and other boilerplate can remain; use the returned title and description to judge the page.
@@ -346,9 +379,9 @@ pytest -m integration tests/test_live_pyfind.py -s
 pytest -m integration tests/test_live_input_gate.py -s
 ```
 
-`tests/test_live_pyfind.py` initializes the real PyFinder pool and captures the desktop. `tests/test_live_input_gate.py` installs the real keyboard/mouse hooks, briefly blocks physical input, verifies tagged injection passes, and exercises the emergency hotkey with harmless F16 chords. Run it only on an interactive desktop. `tests/test_searxng.py` uses a local HTTP fixture, so it does not need a running SearXNG instance.
+`tests/test_live_pyfind.py` initializes the real PyFinder pool and captures the desktop. `tests/test_live_input_gate.py` installs the real keyboard/mouse hooks, briefly blocks physical input, verifies tagged injection passes, and exercises the emergency hotkey with harmless F16 chords. Run it only on an interactive desktop. `tests/test_searxng.py` uses a local HTTP fixture, so it does not need a running SearXNG instance. `tests/test_web_server.py` checks that the websearch server registers only the web tools.
 
-To exercise the stdio protocol without OpenCode:
+To exercise both stdio servers without OpenCode:
 
 ```powershell
 python -m pytest -q tests/test_stdio_smoke.py
@@ -358,8 +391,10 @@ python -m pytest -q tests/test_stdio_smoke.py
 
 - `PyFind is not installed`: install the editable package from `F:\all\GitHub\autopy2`.
 - `loge2 is not installed`: install the editable package from `F:\all\GitHub\loge2` in the same interpreter that runs the MCP server.
-- `block_user_input` fails to install a hook: make sure the server runs in an interactive desktop session, not a service or session-0 process.
-- `opencode mcp list` shows `failed`: check the absolute Python path, `cwd`, and that `python -m custom_agent_mcp` starts without an immediate traceback.
+- `block_user_input` fails to install a hook: make sure the PyFind server runs in an interactive desktop session, not a service or session-0 process.
+- `opencode mcp list` shows `failed` for `pyfind`: check the absolute Python path, `cwd`, and that `python -m custom_agent_mcp` starts without an immediate traceback.
+- `opencode mcp list` shows `failed` for `websearch`: check that `python -m custom_agent_mcp.web_server` starts; it does not need PyFind or loge2, only `mcp` and `loguru`.
+- `web_search` is missing from the PyFind tools: expected. The web tools are registered by the separate `websearch` server; add that MCP entry.
 - No OCR text: confirm the Windows OCR language pack is installed and try a smaller region.
 - `find_image` misses: use the actual on-screen pixels as the template, raise the region size, or lower `threshold`.
 - `web_search` returns HTTP 403: add `json` to `search.formats` in SearXNG's `settings.yml`, restart it, and check the limiter.

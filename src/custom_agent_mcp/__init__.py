@@ -1,3 +1,3 @@
-"""MCP server for local Windows automation and SearXNG web research."""
+"""MCP servers for local Windows automation and SearXNG web research."""
 
 __version__ = "0.1.0"

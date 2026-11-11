@@ -27,7 +27,7 @@ from loguru import logger
 from .exceptions import SearxngError
 
 DEFAULT_SEARXNG_URL = "http://127.0.0.1:8888"
-DEFAULT_USER_AGENT = "custom-agent-mcp/0.1 (SearXNG client)"
+DEFAULT_USER_AGENT = "custom-agent-mcp/0.2 (SearXNG client)"
 DEFAULT_TIMEOUT = 15.0
 DEFAULT_START_TIMEOUT = 90.0
 MAX_TIMEOUT = 120.0

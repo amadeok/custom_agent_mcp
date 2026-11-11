@@ -41,8 +41,8 @@ def test_observation_tools_registered(tmp_path):
     assert "find_image" in names
     assert "list_templates" in names
     assert "reload_templates" in names
-    assert "web_search" not in names
-    assert "web_fetch" not in names
+    assert "dynamic_search" not in names
+    assert "page_fetch" not in names
     assert "start_searxng" not in names
     assert "click" not in names
     assert "type_text" not in names
@@ -154,8 +154,8 @@ def test_instructions_require_batching_dependent_input():
     assert "window_title" in instructions
     assert 'mode="task"' not in instructions
     assert "task_mode" not in instructions
-    assert "web_search" not in instructions
-    assert "web_fetch" not in instructions
+    assert "dynamic_search(" not in instructions
+    assert "page_fetch" not in instructions
 
 
 def test_input_tool_descriptions_mention_batching(tmp_path):

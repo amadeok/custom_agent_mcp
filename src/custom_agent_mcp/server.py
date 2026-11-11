@@ -29,7 +29,7 @@ builtins.print = _stderr_print
 
 INSTRUCTIONS = """\
 This server provides local Windows screen automation through PyFind. Web
-research lives in the separate websearch server.
+research lives in the separate dynamic_search_kit server.
 
 Start with list_windows or list_monitors to learn the desktop layout, then use
 screenshot or ocr to inspect the current screen. Prefer find_text and

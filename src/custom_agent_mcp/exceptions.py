@@ -27,3 +27,15 @@ class FocusNotAcquiredError(PyFindRuntimeError):
 
 class SearxngError(RuntimeError):
     pass
+
+
+class TavilyError(RuntimeError):
+    pass
+
+
+class CamoufoxError(RuntimeError):
+    pass
+
+
+class DynamicSearchError(RuntimeError):
+    pass

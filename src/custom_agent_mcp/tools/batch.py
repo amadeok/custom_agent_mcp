@@ -84,11 +84,26 @@ class Command(BaseModel):
 
 # screenshot returns image content, which is not useful inside a blind JSON
 # result. run_commands is excluded so a queue cannot recurse. Web tools are
-# normally registered on the separate websearch server, but keep them excluded
-# defensively: a focused queue would hold the input gate closed while a remote
-# request runs.
+# normally registered on the separate dynamic_search_kit server, but keep them
+# excluded defensively: a focused queue would hold the input gate closed while a
+# remote request runs. The old mcp_* names stay excluded for compatibility.
 _EXCLUDED_COMMANDS = frozenset(
-    {"screenshot", "run_commands", "web_search", "web_fetch"}
+    {
+        "screenshot",
+        "run_commands",
+        "dynamic_search",
+        "searxng_search",
+        "tavily_search",
+        "camoufox_search",
+        "tinyfish_search",
+        "page_fetch",
+        "camoufox_open",
+        "camoufox_read",
+        "camoufox_act",
+        "camoufox_session",
+        "mcp_web_search",
+        "mcp_page_fetch",
+    }
 )
 
 CommandHandler = Callable[..., Any]
@@ -310,7 +325,7 @@ def register_batch_tools(
         "releasing it with a queued gate command opens the block early.\n\n"
         "The queue accepts the registered input, gate, find, OCR, and "
         "observation tools, except screenshot and run_commands itself. Web "
-        f"tools live in the separate websearch server. Available now: {available}. "
+        f"tools live in the separate dynamic_search_kit server. Available now: {available}. "
         "Use find_text or find_image with timeout "
         "inside the queue to wait for UI state. A screenshot or a visual "
         "decision ends the queue: inspect, then start the next one."

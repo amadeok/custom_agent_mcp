@@ -20,6 +20,9 @@ def _env(tmp_path: Path) -> dict[str, str]:
             "PYFIND_MCP_ALLOW_INPUT_GATE": "false",
             "PYFIND_MCP_LOG_LEVEL": "ERROR",
             "SEARXNG_MCP_START_CMD": "",
+            "DYNAMIC_SEARCH_TOOL_MODE": "combined",
+            "DYNAMIC_SEARCH_PROVIDERS": "searxng,tavily,tinyfish,camoufox",
+            "DYNAMIC_SEARCH_STRATEGY": "first",
         }
     )
     return env
@@ -48,17 +51,18 @@ def test_stdio_pyfind_server_lists_tools(tmp_path):
     assert "ocr" in names
     assert "find_image" in names
     assert "run_commands" in names
-    assert "web_search" not in names
-    assert "web_fetch" not in names
+    assert "dynamic_search" not in names
+    assert "page_fetch" not in names
     assert "click" not in names
     assert "block_user_input" not in names
 
 
-def test_stdio_websearch_server_lists_tools(tmp_path):
-    names = _tool_names(tmp_path, ["-m", "custom_agent_mcp.web_server"])
+def test_stdio_dynamic_search_server_lists_tools(tmp_path):
+    names = _tool_names(tmp_path, ["-m", "custom_agent_mcp.dynamic_search_kit"])
 
-    assert "web_search" in names
-    assert "web_fetch" in names
+    assert "dynamic_search" in names
+    assert "page_fetch" in names
+    assert "camoufox_open" in names
     assert "screenshot" not in names
     assert "ocr" not in names
     assert "run_commands" not in names

@@ -448,8 +448,8 @@ def test_run_commands_cannot_recurse(tmp_path):
 def test_web_tools_cannot_be_queued(tmp_path):
     mcp = FakeMCP()
     handlers = _handlers([])
-    handlers["web_search"] = lambda *args: {"ok": True}
-    handlers["web_fetch"] = lambda *args: {"ok": True}
+    handlers["dynamic_search"] = lambda *args: {"ok": True}
+    handlers["page_fetch"] = lambda *args: {"ok": True}
     register_batch_tools(
         mcp,
         FakeRuntime(),
@@ -459,7 +459,7 @@ def test_web_tools_cannot_be_queued(tmp_path):
 
     run_commands = mcp.tools["run_commands"]
 
-    for name in ("web_search", "web_fetch"):
+    for name in ("dynamic_search", "page_fetch"):
         with pytest.raises(ToolError, match=f"unknown function '{name}'"):
             run_commands(commands=[Command(name=name)])
 

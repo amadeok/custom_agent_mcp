@@ -1,22 +1,17 @@
-"""Tests for the TinyFish search fallback."""
+"""Tests for the TinyFish search client and its provider registration."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 import pytest
-from mcp import Client
 
-from custom_agent_mcp.exceptions import SearxngError
-from custom_agent_mcp.searxng import SearxngClient
+from custom_agent_mcp.dynamic_search import DynamicSearchService, SearchRequest
 from custom_agent_mcp.settings import Settings
 from custom_agent_mcp.tinyfish import TinyFishClient, TinyFishError, load_api_key
-from custom_agent_mcp.web_server import create_web_server
 
 PAYLOAD = {
     "query": "test",
@@ -162,243 +157,29 @@ def test_load_api_key_from_default_cwd_env_file(monkeypatch, tmp_path):
     assert load_api_key() == "cwd-key"
 
 
-def _settings(tmp_path: Path) -> Settings:
-    return Settings(
-        templates_dir=tmp_path / "templates",
-        output_dir=tmp_path / "out",
-        tinyfish_fallback=True,
-    )
-
-
-def _payload(results: list[dict]) -> dict:
-    return {
-        "ok": True,
-        "query": "test",
-        "instance": "http://searx.test",
-        "page": 1,
-        "result_count": len(results),
-        "number_of_results": len(results),
-        "results": results,
-        "answers": [],
-        "infoboxes": [],
-        "suggestions": [],
-        "corrections": [],
-        "unresponsive_engines": [],
-    }
-
-
-def _result(title: str, url: str) -> dict:
-    return {
-        "title": title,
-        "url": url,
-        "snippet": "snippet",
-        "engine": "brave",
-        "engines": ["brave"],
-        "score": 1.0,
-        "category": "general",
-        "published_date": None,
-        "thumbnail": None,
-    }
-
-
-def _call_web_search(settings: Settings, **arguments) -> object:
-    server = create_web_server(settings)
-
-    async def call():
-        async with Client(server) as client:
-            return await client.call_tool("web_search", arguments)
-
-    return asyncio.run(call())
-
-
-def test_no_fallback_when_searxng_has_results(monkeypatch, tmp_path):
+def test_legacy_tinyfish_provider_can_be_configured(monkeypatch, tmp_path):
     monkeypatch.setenv("TINYFISH_API_KEY", "test-key")
-    monkeypatch.setenv("TINYFISH_MCP_ENV_FILE", str(tmp_path / "missing.env"))
-    result_item = _result("SearXNG result", "https://searx.example")
-    monkeypatch.setattr(
-        SearxngClient, "search", lambda self, *a, **k: _payload([result_item])
-    )
-
-    def fail(*args, **kwargs):
-        raise AssertionError("fallback must not run when SearXNG returned results")
-
-    monkeypatch.setattr(TinyFishClient, "search", fail)
-
-    result = _call_web_search(_settings(tmp_path), query="test")
-
-    assert result.is_error is False
-    assert result.structured_content["results"][0]["url"] == "https://searx.example"
-    assert result.structured_content["provider"] == "searxng"
-    assert "fallback_used" not in result.structured_content
-
-
-def test_fallback_when_searxng_returns_nothing(monkeypatch, tmp_path):
-    monkeypatch.setenv("TINYFISH_API_KEY", "test-key")
-    monkeypatch.setenv("TINYFISH_MCP_ENV_FILE", str(tmp_path / "missing.env"))
-    monkeypatch.setattr(SearxngClient, "search", lambda self, *a, **k: _payload([]))
-    monkeypatch.setattr(
-        TinyFishClient,
-        "search",
-        lambda self, *a, **k: {
-            **_payload([_result("Tiny result", "https://tiny.example")]),
-            "provider": "tinyfish",
-            "instance": "https://api.search.tinyfish.ai",
-        },
-    )
-
-    result = _call_web_search(_settings(tmp_path), query="test")
-
-    assert result.is_error is False
-    content = result.structured_content
-    assert content["fallback_used"] is True
-    assert content["fallback_reason"] == "no_results"
-    assert content["results"][0]["url"] == "https://tiny.example"
-
-
-def test_fallback_when_searxng_errors(monkeypatch, tmp_path):
-    monkeypatch.setenv("TINYFISH_API_KEY", "test-key")
-    monkeypatch.setenv("TINYFISH_MCP_ENV_FILE", str(tmp_path / "missing.env"))
-
-    def unreachable(self, *args, **kwargs):
-        raise SearxngError("Could not reach http://127.0.0.1:8888")
-
-    monkeypatch.setattr(SearxngClient, "search", unreachable)
-    monkeypatch.setattr(
-        TinyFishClient,
-        "search",
-        lambda self, *a, **k: {
-            **_payload([_result("Tiny result", "https://tiny.example")]),
-            "provider": "tinyfish",
-        },
-    )
-
-    result = _call_web_search(_settings(tmp_path), query="test")
-
-    assert result.is_error is False
-    content = result.structured_content
-    assert content["fallback_used"] is True
-    assert content["fallback_reason"] == "searxng_error"
-    assert "Could not reach" in content["searxng_error"]
-
-
-def test_no_fallback_with_engine_filter(monkeypatch, tmp_path):
-    monkeypatch.setenv("TINYFISH_API_KEY", "test-key")
-    monkeypatch.setenv("TINYFISH_MCP_ENV_FILE", str(tmp_path / "missing.env"))
-    monkeypatch.setattr(SearxngClient, "search", lambda self, *a, **k: _payload([]))
-
-    def fail(*args, **kwargs):
-        raise AssertionError("fallback must not run with an engine filter")
-
-    monkeypatch.setattr(TinyFishClient, "search", fail)
-
-    result = _call_web_search(
-        _settings(tmp_path), query="test", engines=["duckduckgo"]
-    )
-
-    assert result.is_error is False
-    assert result.structured_content["results"] == []
-    assert result.structured_content["provider"] == "searxng"
-
-
-def test_no_fallback_when_disabled(monkeypatch, tmp_path):
-    monkeypatch.setenv("TINYFISH_API_KEY", "test-key")
-    monkeypatch.setenv("TINYFISH_MCP_ENV_FILE", str(tmp_path / "missing.env"))
-    monkeypatch.setattr(SearxngClient, "search", lambda self, *a, **k: _payload([]))
-
-    def fail(*args, **kwargs):
-        raise AssertionError("fallback must not run when disabled")
-
-    monkeypatch.setattr(TinyFishClient, "search", fail)
-
     settings = Settings(
         templates_dir=tmp_path / "templates",
         output_dir=tmp_path / "out",
-        tinyfish_fallback=False,
+        search_providers=("tinyfish",),
+        tool_mode="separate",
     )
-    result = _call_web_search(settings, query="test")
+    service = DynamicSearchService(settings)
 
-    assert result.is_error is False
-    assert result.structured_content["results"] == []
-    assert result.structured_content["provider"] == "searxng"
-
-
-def test_provider_searxng_never_falls_back(monkeypatch, tmp_path):
-    monkeypatch.setenv("TINYFISH_API_KEY", "test-key")
-    monkeypatch.setenv("TINYFISH_MCP_ENV_FILE", str(tmp_path / "missing.env"))
-
-    def unreachable(self, *args, **kwargs):
-        raise SearxngError("Could not reach http://127.0.0.1:8888")
-
-    monkeypatch.setattr(SearxngClient, "search", unreachable)
-
-    def fail(*args, **kwargs):
-        raise AssertionError("provider='searxng' must not call TinyFish")
-
-    monkeypatch.setattr(TinyFishClient, "search", fail)
-
-    result = _call_web_search(_settings(tmp_path), query="test", provider="searxng")
-
-    assert result.is_error is True
-
-
-def test_provider_tinyfish_bypasses_searxng(monkeypatch, tmp_path):
-    monkeypatch.setenv("TINYFISH_API_KEY", "test-key")
-    monkeypatch.setenv("TINYFISH_MCP_ENV_FILE", str(tmp_path / "missing.env"))
-
-    def fail(*args, **kwargs):
-        raise AssertionError("provider='tinyfish' must not call SearXNG")
-
-    monkeypatch.setattr(SearxngClient, "search", fail)
     monkeypatch.setattr(
-        TinyFishClient,
-        "search",
-        lambda self, *a, **k: {
-            **_payload([_result("Tiny result", "https://tiny.example")]),
+        service,
+        "search_provider",
+        lambda provider, request, **kwargs: {
+            "ok": True,
             "provider": "tinyfish",
+            "result_count": 1,
+            "results": [{"url": "https://tiny.example"}],
+            "attempts": [],
         },
     )
 
-    result = _call_web_search(_settings(tmp_path), query="test", provider="tinyfish")
+    result = service.search_combined(SearchRequest(query="test"))
 
-    assert result.is_error is False
-    content = result.structured_content
-    assert content["provider"] == "tinyfish"
-    assert content["results"][0]["url"] == "https://tiny.example"
-    assert "fallback_used" not in content
-
-
-def test_provider_tinyfish_rejects_filters(monkeypatch, tmp_path):
-    monkeypatch.setenv("TINYFISH_API_KEY", "test-key")
-    monkeypatch.setenv("TINYFISH_MCP_ENV_FILE", str(tmp_path / "missing.env"))
-
-    result = _call_web_search(
-        _settings(tmp_path),
-        query="test",
-        provider="tinyfish",
-        engines=["duckduckgo"],
-    )
-
-    assert result.is_error is True
-
-
-def test_provider_tinyfish_requires_a_key(monkeypatch, tmp_path):
-    monkeypatch.delenv("TINYFISH_API_KEY", raising=False)
-    monkeypatch.setenv("TINYFISH_MCP_ENV_FILE", str(tmp_path / "missing.env"))
-
-    result = _call_web_search(_settings(tmp_path), query="test", provider="tinyfish")
-
-    assert result.is_error is True
-
-
-def test_searxng_error_propagates_without_a_key(monkeypatch, tmp_path):
-    monkeypatch.delenv("TINYFISH_API_KEY", raising=False)
-    monkeypatch.setenv("TINYFISH_MCP_ENV_FILE", str(tmp_path / "missing.env"))
-
-    def unreachable(self, *args, **kwargs):
-        raise SearxngError("Could not reach http://127.0.0.1:8888")
-
-    monkeypatch.setattr(SearxngClient, "search", unreachable)
-
-    result = _call_web_search(_settings(tmp_path), query="test")
-
-    assert result.is_error is True
+    assert result["provider"] == "tinyfish"
+    assert result["provider_chain"] == ["tinyfish"]

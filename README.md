@@ -1,8 +1,8 @@
 # custom-agent-mcp
 
-A pair of local [Model Context Protocol](https://modelcontextprotocol.io/) servers: one for Windows automation and one for web research. The PyFind server exposes screen capture, Windows OCR, and template matching from the local screen-automation package in `F:\all\GitHub\autopy2`. Optional input tools use loge2 (`F:\all\GitHub\loge2`) to block physical keyboard/mouse input with global hooks while injecting tagged keyboard and mouse events through the block. The `websearch` server adds `web_search`, `web_fetch`, and an optional `start_searxng`: searches go through a SearXNG JSON API (with TinyFish as a fallback), and fetched HTML is converted to readable text for the agent.
+A pair of local [Model Context Protocol](https://modelcontextprotocol.io/) servers: one for Windows automation and one for configurable web search. The PyFind server exposes screen capture, Windows OCR, and template matching from the local screen-automation package in `F:\all\GitHub\autopy2`. Optional input tools use loge2 (`F:\all\GitHub\loge2`) to block physical keyboard/mouse input with global hooks while injecting tagged keyboard and mouse events through the block. The `dynamic_search_kit` server adds SearXNG, Tavily, TinyFish, and persistent Camoufox browser sessions, plus readable page fetching and an optional `start_searxng`.
 
-The PyFind server keeps one `PyFinder` instance alive for its whole lifetime. The first screen tool call pays the PyFind process-pool startup cost; later calls reuse the warm pool and template cache. The `websearch` server is independent: it does not import PyFind or loge2 and can run when only web research is needed.
+The PyFind server keeps one `PyFinder` instance alive for its whole lifetime. The first screen tool call pays the PyFind process-pool startup cost; later calls reuse the warm pool and template cache. The `dynamic_search_kit` server is independent: it does not import PyFind or loge2 and can run when only web research is needed. Camoufox is optional; SearXNG and Tavily work without it.
 
 ## Requirements
 
@@ -11,7 +11,8 @@ The PyFind server keeps one `PyFinder` instance alive for its whole lifetime. Th
 - PyFind installed in the same interpreter, normally editable from `F:\all\GitHub\autopy2` (PyFind server only)
 - loge2 installed in the same interpreter for input and blocking, normally editable from `F:\all\GitHub\loge2` (PyFind server only)
 - The MCP Python SDK v2 (`mcp>=2.3,<3`)
-- A reachable SearXNG instance with JSON output enabled for `web_search`; `web_fetch` only needs network access (the web tools add no Python dependency)
+- A reachable SearXNG instance with JSON output enabled, a Tavily key, a TinyFish key, or the optional Camoufox browser extra
+- `page_fetch` only needs network access; the base web tools add no Python dependency
 
 Verify PyFind and loge2 before installing:
 
@@ -48,15 +49,28 @@ The PyFind server entry point is:
 python -m custom_agent_mcp
 ```
 
-The web search server entry point is:
+The Dynamic Search Kit entry point is:
 
 ```powershell
-python -m custom_agent_mcp.web_server
+python -m custom_agent_mcp.dynamic_search_kit
 # or the installed console script:
-custom-agent-websearch-mcp
+dynamic-search-kit
 ```
 
-Both speak MCP over stdio. They do not print a banner.
+The old `python -m custom_agent_mcp.web_server` and `custom-agent-websearch-mcp` names remain as compatibility aliases. Both servers speak MCP over stdio and do not print a banner.
+
+For local Camoufox sessions, install the optional browser extra and fetch the browser once:
+
+```powershell
+python -m pip install -e ".[browser]"
+python -m camoufox fetch
+```
+
+Remote Camoufox mode only needs Playwright on the MCP host; the browser can run on another machine:
+
+```powershell
+python -m pip install -e ".[remote]"
+```
 
 ## OpenCode configuration
 
@@ -95,21 +109,44 @@ OpenCode V2 stores MCP servers under `mcp.servers`. Register the two servers sep
           "execution": 300000
         }
       },
-      "websearch": {
+      "dynamic_search_kit": {
         "type": "local",
         "command": [
           "C:\\Users\\amade\\AppData\\Local\\Python\\pythoncore-3.13-64\\python.exe",
           "-m",
-          "custom_agent_mcp.web_server"
+          "custom_agent_mcp.dynamic_search_kit"
         ],
         "cwd": "F:\\all\\GitHub\\custom_agent_mcp",
         "environment": {
+          // combined = one dynamic_search tool; separate = one tool per
+          // provider; both = expose the combined and separate tools.
+          "DYNAMIC_SEARCH_TOOL_MODE": "combined",
+          // Enabled providers and fallback order.
+          "DYNAMIC_SEARCH_PROVIDERS": "searxng,tavily,tinyfish,camoufox",
+          // first = stop at the first provider with results;
+          // merge = query every provider and deduplicate URLs.
+          "DYNAMIC_SEARCH_STRATEGY": "first",
+          // fetch_url defaults: static first, Camoufox only when needed.
+          "DYNAMIC_SEARCH_FETCH_MAX_CHARS": "20000",
+          "DYNAMIC_SEARCH_FETCH_RENDER": "auto",
+          "DYNAMIC_SEARCH_FETCH_MIN_CHARS": "300",
           "SEARXNG_MCP_BASE_URL": "http://127.0.0.1:8888",
           "SEARXNG_MCP_TIMEOUT": "15",
-          "SEARXNG_MCP_USER_AGENT": "custom-agent-mcp/0.1 (SearXNG client)",
+          "SEARXNG_MCP_USER_AGENT": "custom-agent-mcp/0.2 (SearXNG client)",
           // Optional: enables the start_searxng tool.
           "SEARXNG_MCP_START_CMD": "C:\\Users\\amade\\Apps\\searxng-windows\\start-searxng.cmd",
-          "SEARXNG_MCP_START_TIMEOUT": "90"
+          "SEARXNG_MCP_START_TIMEOUT": "90",
+          // Put TAVILY_API_KEY in .env instead of committing it here.
+          "TAVILY_API_KEY": "tvly-...",
+          "TAVILY_MCP_SEARCH_DEPTH": "basic",
+          // local launches Camoufox on this PC; remote connects to a
+          // Playwright websocket server.
+          "CAMOUFOX_MCP_MODE": "local",
+          "CAMOUFOX_MCP_HEADLESS": "true",
+          "CAMOUFOX_MCP_PROFILE_DIR": "C:\\Users\\amade\\AppData\\Local\\dynamic-search-kit\\camoufox",
+          "CAMOUFOX_MCP_SEARCH_ENGINE": "duckduckgo"
+          // "CAMOUFOX_MCP_MODE": "remote",
+          // "CAMOUFOX_MCP_REMOTE_URL": "ws://127.0.0.1:9222/dynamic-search"
         },
         "codemode": false,
         "timeout": {
@@ -123,9 +160,9 @@ OpenCode V2 stores MCP servers under `mcp.servers`. Register the two servers sep
 }
 ```
 
-Set both `PYFIND_MCP_ALLOW_INPUT` and `PYFIND_MCP_ALLOW_INPUT_GATE` to `"true"` to expose the injection and blocking tools, then restart OpenCode or reconnect the MCP server. The gate requires input tools because its purpose is to let the PyFind server inject while physical input is blocked. The `websearch` entry has no PyFind settings and can be enabled on its own.
+Set both `PYFIND_MCP_ALLOW_INPUT` and `PYFIND_MCP_ALLOW_INPUT_GATE` to `"true"` to expose the injection and blocking tools, then restart OpenCode or reconnect the MCP server. The gate requires input tools because its purpose is to let the PyFind server inject while physical input is blocked. The `dynamic_search_kit` entry has no PyFind settings and can be enabled on its own.
 
-`codemode: false` exposes the PyFind tools directly as `pyfind_screenshot`, `pyfind_ocr`, `pyfind_find_image`, and so on, and the web tools as `websearch_web_search`, `websearch_web_fetch`, and `websearch_start_searxng`. Ordered input batching does not require Code Mode: call `pyfind_run_commands` directly with a JSON list of commands. With Code Mode enabled, call it through `execute` as `tools.pyfind.run_commands(...)` and the web tools as `tools.websearch.web_search(...)`.
+`codemode: false` exposes the PyFind tools directly as `pyfind_screenshot`, `pyfind_ocr`, `pyfind_find_image`, and so on, and the search tools as `dynamic_search_kit_dynamic_search`, `dynamic_search_kit_page_fetch`, `dynamic_search_kit_camoufox_open`, and so on. Ordered input batching does not require Code Mode: call `pyfind_run_commands` directly with a JSON list of commands. With Code Mode enabled, call it through `execute` as `tools.pyfind.run_commands(...)` and the search tools as `tools.dynamic_search_kit.dynamic_search(...)`.
 
 After editing the config, check the connection:
 
@@ -137,7 +174,7 @@ Or use `/mcps` inside OpenCode.
 
 ## Environment variables
 
-`PYFIND_MCP_*` variables configure the PyFind server. `SEARXNG_MCP_*` and `TINYFISH_*` variables configure the websearch server. `PYFIND_MCP_LOG_LEVEL` is read by both servers; leave the websearch entry with the default when you do not need web search debug logs.
+`PYFIND_MCP_*` variables configure the PyFind server. `DYNAMIC_SEARCH_*`, `SEARXNG_MCP_*`, `TAVILY_*`, and `CAMOUFOX_MCP_*` variables configure the `dynamic_search_kit` server. `PYFIND_MCP_LOG_LEVEL` is read by both servers; leave the `dynamic_search_kit` entry with the default when you do not need web search debug logs. `.env.example` lists the full search configuration with safe placeholders.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -158,20 +195,47 @@ Or use `/mcps` inside OpenCode.
 | `PYFIND_MCP_PREVIEW_MAX_WIDTH` | `1600` | Longest preview dimension returned as MCP image content |
 | `PYFIND_MCP_MAX_OUTPUT_FILES` | `100` | Number of saved screenshots kept in the output directory |
 | `PYFIND_MCP_LOG_LEVEL` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL` (both servers) |
+| `DYNAMIC_SEARCH_TOOL_MODE` | `combined` | `combined` (one `dynamic_search` tool), `separate` (one tool per provider), or `both` |
+| `DYNAMIC_SEARCH_PROVIDERS` | `searxng,tavily,tinyfish,camoufox` | Enabled providers and their fallback order; any subset of `searxng`, `tavily`, `tinyfish`, and `camoufox` |
+| `DYNAMIC_SEARCH_STRATEGY` | `first` | `first` stops at the first provider with results; `merge` queries all and deduplicates URLs |
+| `DYNAMIC_SEARCH_FETCH_MAX_CHARS` | `20000` | `fetch_url`: default text characters returned per page |
+| `DYNAMIC_SEARCH_FETCH_RENDER` | `auto` | `fetch_url`: `auto` (static first, Camoufox only when needed), `always`, or `never` |
+| `DYNAMIC_SEARCH_FETCH_MIN_CHARS` | `300` | `fetch_url`: static HTML below this length is treated as a shell and rendered |
 | `SEARXNG_MCP_BASE_URL` | `http://127.0.0.1:8888` | SearXNG base URL; `/search` is appended (a trailing `/search` is stripped) |
-| `SEARXNG_MCP_TIMEOUT` | `15` | HTTP timeout in seconds for `web_search` and `web_fetch` |
-| `SEARXNG_MCP_USER_AGENT` | `custom-agent-mcp/0.1 (SearXNG client)` | User-Agent sent to SearXNG and fetched pages |
+| `SEARXNG_MCP_TIMEOUT` | `15` | HTTP timeout in seconds for SearXNG and `page_fetch` |
+| `SEARXNG_MCP_USER_AGENT` | `custom-agent-mcp/0.2 (SearXNG client)` | User-Agent sent to SearXNG and fetched pages |
 | `SEARXNG_MCP_START_CMD` | *(empty)* | Launcher that starts a local instance; enables the `start_searxng` tool |
 | `SEARXNG_MCP_START_TIMEOUT` | `90` | Seconds allowed for the launcher to finish |
-| `TINYFISH_API_KEY` | *(empty)* | TinyFish Search key; enables the `web_search` fallback. Also read from `.env` in the server's working directory |
-| `TINYFISH_MCP_FALLBACK` | `true` | Retry `web_search` through TinyFish when SearXNG errors or returns no results |
-| `TINYFISH_MCP_BASE_URL` | `https://api.search.tinyfish.ai` | TinyFish Search endpoint |
+| `TAVILY_API_KEY` | *(empty)* | Tavily key; enables the Tavily provider. Also read from `.env` in the server's working directory |
+| `TAVILY_MCP_BASE_URL` | `https://api.tavily.com` | Tavily API base URL; `/search` is appended |
+| `TAVILY_MCP_TIMEOUT` | `15` | Tavily HTTP timeout in seconds |
+| `TAVILY_MCP_ENV_FILE` | `<cwd>/.env` | Env file used to resolve `TAVILY_API_KEY` when the variable is unset |
+| `TAVILY_MCP_SEARCH_DEPTH` | `basic` | `basic`, `advanced`, `fast`, or `ultra-fast` |
+| `TAVILY_MCP_INCLUDE_ANSWER` | `false` | Ask Tavily for an LLM-generated answer |
+| `TAVILY_MCP_INCLUDE_RAW_CONTENT` | `false` | Ask Tavily for cleaned page content in each result |
+| `CAMOUFOX_MCP_MODE` | `local` | `local` launches Camoufox on this PC; `remote` connects to a Playwright websocket server |
+| `CAMOUFOX_MCP_REMOTE_URL` | *(empty)* | Remote endpoint such as `ws://127.0.0.1:9222/dynamic-search`; required in remote mode |
+| `CAMOUFOX_MCP_HEADLESS` | `true` | Run the local browser headless; set `false` to watch or log in manually |
+| `CAMOUFOX_MCP_HUMANIZE` | `true` | Humanize cursor movement |
+| `CAMOUFOX_MCP_PROFILE_DIR` | `%LOCALAPPDATA%\dynamic-search-kit\camoufox` | Root directory for persistent local profiles; each session gets a subdirectory |
+| `CAMOUFOX_MCP_LOCALE` | `en-US` | Browser locale |
+| `CAMOUFOX_MCP_OS` | `windows` | Fingerprint target OS: `windows`, `macos`, `linux`, or `auto` |
+| `CAMOUFOX_MCP_PROXY` | *(empty)* | Proxy URL or JSON object, for example `http://user:pass@host:8080` |
+| `CAMOUFOX_MCP_GEOIP` | `false` | `true` matches locale/geolocation to the proxy exit IP; an IP string targets that IP |
+| `CAMOUFOX_MCP_TIMEOUT` | `45` | Browser launch, navigation, and action timeout in seconds |
+| `CAMOUFOX_MCP_SETTLE_MS` | `750` | Extra wait after navigation or an action, in milliseconds |
+| `CAMOUFOX_MCP_SEARCH_ENGINE` | `duckduckgo` | `duckduckgo`, `bing`, `google`, or `custom` |
+| `CAMOUFOX_MCP_SEARCH_URL` | *(empty)* | Custom search URL template containing `{query}`; overrides the engine URL |
+| `CAMOUFOX_MCP_SEARCH_SESSION` | `search` | Session name used by the Camoufox search provider |
+| `CAMOUFOX_MCP_FETCH_SESSION` | `fetch` | Separate session used by `fetch_url` |
+| `TINYFISH_API_KEY` | *(empty)* | TinyFish key; enables the TinyFish provider. Also read from `.env` |
+| `TINYFISH_MCP_BASE_URL` | `https://api.search.tinyfish.ai` | TinyFish endpoint |
 | `TINYFISH_MCP_TIMEOUT` | `15` | TinyFish HTTP timeout in seconds |
 | `TINYFISH_MCP_ENV_FILE` | `<cwd>/.env` | Env file used to resolve `TINYFISH_API_KEY` when the variable is unset |
 
 ## Tools
 
-The PyFind server registers observation, find, batch, and optional input tools. The websearch server registers only `web_search`, `web_fetch`, and the optional `start_searxng`. Injection tools require `PYFIND_MCP_ALLOW_INPUT=true`; blocking tools additionally require `PYFIND_MCP_ALLOW_INPUT_GATE=true`. `run_commands` is always registered in the PyFind server, but it can only queue tools registered in that server.
+The PyFind server registers observation, find, batch, and optional input tools. The `dynamic_search_kit` server registers the configured search surface, `page_fetch`, the persistent Camoufox session tools when enabled, and the optional `start_searxng`. Injection tools require `PYFIND_MCP_ALLOW_INPUT=true`; blocking tools additionally require `PYFIND_MCP_ALLOW_INPUT_GATE=true`. `run_commands` is always registered in the PyFind server, but it can only queue tools registered in that server.
 
 | Tool | Access | Description |
 |---|---|---|
@@ -230,7 +294,7 @@ A focused queue holds input blocked for its whole duration, including any `sleep
 
 Do not split these commands across separate tool calls. A standalone input call restores focus to the previously focused window after its injection, and between calls the foreground window can change; a later `type_text` may append instead of replace. The whole queue is validated before anything runs, so a typo in a later entry has no side effects. By default a failed command stops the queue and returns the results so far; `continue_on_error=true` keeps going. If a queue blocks input, put `unblock_user_input` last and use `continue_on_error=true` so a failure cannot strand the block. A focused queue already holds the gate for its whole duration; releasing it with a queued gate command opens the block early.
 
-A screenshot or a visual decision ends the queue: inspect the result, then start the next queue. Inside a queue, use `find_text` or `find_image` with `timeout` to wait for UI state instead of sleeping. The queue accepts every tool registered in the PyFind server except `screenshot` and `run_commands` itself. Web tools live in the separate websearch server and are not queueable here: they are network calls and would hold the input gate closed while they run.
+A screenshot or a visual decision ends the queue: inspect the result, then start the next queue. Inside a queue, use `find_text` or `find_image` with `timeout` to wait for UI state instead of sleeping. The queue accepts every tool registered in the PyFind server except `screenshot` and `run_commands` itself. Web tools live in the separate `dynamic_search_kit` server and are not queueable here: they are network calls and would hold the input gate closed while they run.
 
 When `press_key` or `type_text` had to take focus, the restore is delayed by `settle` (default 0.2 s) while the gate is still closed. This gives the target time to process the last event before it is deactivated: without it, Chrome can lose a `ctrl+l` when the window had to be refocused and the next call types into the old URL. The delay is skipped when the target already had focus, and when the injection raised. Raise `settle` for slow or heavily loaded applications.
 
@@ -278,15 +342,69 @@ Mask templates, directories of templates, and multi-scale matching are not suppo
 
 `screenshot` writes a full-resolution image to the output directory and returns a downscaled preview as MCP image content. The format is PNG by default; set `PYFIND_MCP_IMAGE_FORMAT=webp` for WebP (with `PYFIND_MCP_WEBP_QUALITY` or `PYFIND_MCP_WEBP_LOSSLESS`). The text block contains the full path, preview path, format, dimensions, capture region, and target. Use the full path as a template source when convenient; lossy WebP can slightly reduce template-match scores, so use lossless WebP or PNG for templates.
 
-## Web search server (SearXNG)
+## Dynamic Search Kit
 
-`web_search` and `web_fetch` live in the separate `websearch` server. Start it with `python -m custom_agent_mcp.web_server` (or `custom-agent-websearch-mcp`) and register it as its own MCP entry. It does not import PyFind or loge2; it only needs the shared settings module and network access. Point it at a SearXNG instance with `SEARXNG_MCP_BASE_URL` (default `http://127.0.0.1:8888`). The instance must expose its JSON API; add `json` to `search.formats` in SearXNG's `settings.yml` and restart it:
+`dynamic_search_kit` lives in its own MCP entry. Start it with `python -m custom_agent_mcp.dynamic_search_kit` (or `dynamic-search-kit`). It does not import PyFind or loge2; it only needs the shared settings module and network access. The old `python -m custom_agent_mcp.web_server` and `custom-agent-websearch-mcp` names still work as compatibility aliases.
 
-| Tool | Access | Description |
+The provider chain is deliberately configurable:
+
+```powershell
+# One combined tool: SearXNG then Tavily then TinyFish then Camoufox.
+$env:DYNAMIC_SEARCH_TOOL_MODE = "combined"
+$env:DYNAMIC_SEARCH_PROVIDERS = "searxng,tavily,tinyfish,camoufox"
+$env:DYNAMIC_SEARCH_STRATEGY = "first"
+
+# Or expose one tool per provider.
+$env:DYNAMIC_SEARCH_TOOL_MODE = "separate"
+
+# Or expose both the combined tool and the separate tools.
+$env:DYNAMIC_SEARCH_TOOL_MODE = "both"
+```
+
+`first` stops at the first provider that returns a non-empty result and records each attempt in `attempts`. `merge` queries every provider and keeps the first occurrence of each URL. `dynamic_search` also accepts `providers` per call, so an agent can try `["camoufox", "searxng"]` for one query without changing the server configuration.
+
+| Tool | Mode | Description |
 |---|---|---|
-| `web_search` | read-only, network | Query SearXNG, TinyFish, or auto-fallback between them; returns titles, URLs, snippets, engines, answers, suggestions, and corrections |
-| `web_fetch` | read-only, network | Download an HTTP(S) page and return readable text with inline Markdown links; truncates to `max_chars` |
-| `start_searxng` | local start | Run `SEARXNG_MCP_START_CMD` when the instance is down; returns `already_running`, `started`, `returncode`, and launcher output |
+| `dynamic_search` | combined, both | Search through `DYNAMIC_SEARCH_PROVIDERS` or a per-call provider list; returns the winner plus `attempts`, `provider_chain`, `selected_provider`, `fallback_used`, and `fallback_reason` |
+| `searxng_search` | separate, both | Query only SearXNG; supports categories, engines, language, page, time range, safe search, and `instance_url` |
+| `tavily_search` | separate, both | Query only Tavily; supports up to 20 results, language, time range, safe search, and domain include/exclude |
+| `tinyfish_search` | separate, both | Query only TinyFish; supports up to 50 results and pages 1-11 |
+| `camoufox_search` | separate, both | Search through a persistent Camoufox browser; default engine is DuckDuckGo, configurable to Bing, Google, or a custom URL |
+| `page_fetch` | always | Download static HTML, JSON, XML, or text and return readable text with inline Markdown links |
+| `fetch_url` | when Camoufox enabled | Fetch one model-selected URL: static HTTP first, Camoufox only when the page needs rendering |
+| `camoufox_open` | when Camoufox enabled | Navigate a persistent browser session and return the rendered page text |
+| `camoufox_read` | when Camoufox enabled | Read the current page of a persistent session |
+| `camoufox_act` | when Camoufox enabled | Click, type, press a key, evaluate JavaScript, or wait in a session |
+| `camoufox_session` | when Camoufox enabled | List, close, or close all persistent sessions |
+| `start_searxng` | when configured | Run `SEARXNG_MCP_START_CMD` when the instance is down |
+
+Providers that cannot honor a filter are skipped instead of silently dropping it. For example, `categories` and `engines` are SearXNG-only, so Tavily, TinyFish, and Camoufox are skipped when those are present. `instance_url` is SearXNG-only. Tavily and Camoufox do not paginate; TinyFish accepts pages 1-11. `include_domains` and `exclude_domains` are Tavily-only. Every skip is reported in `attempts` with a reason.
+
+### Choosing pages to fetch
+
+The intended flow is deliberately two-step, because only the model can judge which results are worth reading:
+
+1. Call `dynamic_search` (or `searxng_search`) and inspect the returned titles, URLs, and snippets.
+2. Pick the pages that matter and call `fetch_url` for each one.
+
+`fetch_url` is a single-URL tool, not a pipeline. It tries static HTTP first. In `auto` mode, Camoufox is launched only when the static page is a JavaScript shell, a challenge page, or too short to be useful. `render="always"` forces Camoufox; `render="never"` keeps the fetch static.
+
+```json
+{"url": "https://docs.python.org/3/whatsnew/3.13.html", "render": "auto", "max_chars": 12000}
+```
+
+The result reports:
+
+- `fetch_method`: `static` or `camoufox`
+- `render_reason`: `javascript_shell`, `short_html`, `link_heavy_shell`, `static_error`, `forced`, or a fallback reason
+- `text`, `char_count`, `truncated`, `final_url`
+- `static_error` / `render_error` when a stage failed
+
+`fetch_url` uses `CAMOUFOX_MCP_FETCH_SESSION` (default `fetch`), separate from the search and manual browsing sessions, so it does not navigate away from the page you are working on.
+
+### SearXNG
+
+Point SearXNG at `SEARXNG_MCP_BASE_URL` (default `http://127.0.0.1:8888`). The instance must expose its JSON API; add `json` to `search.formats` in SearXNG's `settings.yml` and restart it:
 
 ```yaml
 search:
@@ -297,36 +415,63 @@ search:
 
 If SearXNG runs locally behind a launcher script, set `SEARXNG_MCP_START_CMD` to that script to register the `start_searxng` tool. It returns immediately when the port is already listening; otherwise it runs the launcher and waits for the instance to accept connections. Success is decided by a TCP probe, not by the exit code, because a broken launcher also exits 0.
 
-### SearXNG and TinyFish
+### Tavily
 
-`web_search` exposes both search methods. `provider="auto"` (default) queries SearXNG and retries once through [TinyFish Search](https://docs.tinyfish.ai/search-api/reference) when SearXNG is unreachable, returns an HTTP error, or answers with zero results. `provider="searxng"` uses only SearXNG; `provider="tinyfish"` uses only TinyFish. TinyFish is free up to 12,000 searches/day (30/minute) and needs a key; set `TINYFISH_API_KEY`, or put it in `.env` next to the server (the file is read on each call, so a key added later needs no restart). An explicit `TINYFISH_MCP_ENV_FILE` overrides the `.env` path.
+Tavily needs a key. Set `TAVILY_API_KEY` or put it in `.env` next to the server; the file is read on each call, so a key added later needs no restart. An explicit `TAVILY_MCP_ENV_FILE` overrides the `.env` path. Tavily returns up to 20 results and has no pagination; a requested page above 1 causes the provider to be skipped in combined mode.
 
-Automatic fallback is skipped when `categories`, `engines`, or an explicit `instance_url` is passed, because those filters cannot be honored, and when `TINYFISH_MCP_FALLBACK=false`. A fallback result sets `fallback_used=true`, `fallback_reason` (`searxng_error` or `no_results`), `searxng_instance`, and `searxng_error` when SearXNG failed. `provider="tinyfish"` rejects `categories`, `engines`, and `instance_url`. TinyFish has no safesearch filter, and its pagination stops at page 11.
+### TinyFish
 
-`web_search` accepts:
+TinyFish is a normal provider, not a hidden fallback. Set `TINYFISH_API_KEY` (or put it in `.env`) and keep `tinyfish` in `DYNAMIC_SEARCH_PROVIDERS`; it is enabled in the default chain between Tavily and Camoufox. It accepts pages 1-11 and has no category or engine filters. `tinyfish_search` is registered in `separate` and `both` modes. Remove `tinyfish` from `DYNAMIC_SEARCH_PROVIDERS` if you do not want it used.
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `query` | required | Search terms, at most 2000 characters |
-| `provider` | `auto` | `auto` (SearXNG then TinyFish), `searxng`, or `tinyfish` |
-| `max_results` | `10` | Results to return, 1-50 |
-| `categories` | none | SearXNG categories such as `general`, `news`, `images` |
-| `engines` | none | SearXNG engine names such as `duckduckgo`, `brave` |
-| `language` | `auto` | Language code, for example `en-US`; TinyFish receives the primary subtag |
-| `pageno` | `1` | Result page, 1-20 (TinyFish stops at 11) |
-| `time_range` | none | `day`, `week`, `month`, or `year` |
-| `safesearch` | `0` | `0` off, `1` moderate, `2` strict (SearXNG only) |
-| `instance_url` | configured URL | Override the SearXNG base URL for this call |
+### Camoufox persistent sessions
 
-The result contains `results` (title, URL, snippet, engine, score, category, published date), plus `answers`, `infoboxes`, `suggestions`, `corrections`, and `unresponsive_engines` when the instance provides them.
+Camoufox is an anti-detect Firefox build driven through Playwright. The server owns the browser session itself, so cookies, localStorage, and the current page stay alive across MCP tool calls. That is the persistent-session layer; no separate browser MCP server is required.
 
-`web_fetch` downloads one HTTP(S) URL and returns readable text. HTML is converted to plain text with inline Markdown links; scripts, styles, and tags are removed. JSON is pretty-printed, and plain text or XML is returned as-is. PDFs and other binary content are rejected. `max_chars` defaults to 20000 and is capped at 200000; the result reports `char_count`, `truncated`, and `download_truncated`. It does not execute JavaScript, send cookies, or authenticate, so use it for static pages and APIs.
+Local mode:
 
-Web tools are not registered in the PyFind server, and `run_commands` cannot call them: a focused queue holds the input gate closed for its whole duration, and a slow remote request would lock the human out. Call them as normal tools on the websearch server instead.
+```powershell
+python -m pip install -e ".[browser]"
+python -m camoufox fetch
+$env:CAMOUFOX_MCP_MODE = "local"
+$env:CAMOUFOX_MCP_HEADLESS = "true"
+$env:CAMOUFOX_MCP_PROFILE_DIR = "C:\Users\amade\AppData\Local\dynamic-search-kit\camoufox"
+```
+
+Each named session gets its own profile directory under `CAMOUFOX_MCP_PROFILE_DIR`, so `default`, `search`, and any other session name have separate cookies and logins. Sessions survive server restarts through that profile. Set `CAMOUFOX_MCP_HEADLESS=false` to watch the browser or complete a login manually.
+
+Remote mode:
+
+```powershell
+# On the browser host (0.0.0.0 accepts other machines; use 127.0.0.1 for local only):
+camoufox-remote-host --host 0.0.0.0 --port 9222 --ws-path dynamic-search --headed
+
+# On the MCP host:
+$env:CAMOUFOX_MCP_MODE = "remote"
+$env:CAMOUFOX_MCP_REMOTE_URL = "ws://browser-host:9222/dynamic-search"
+```
+
+`camoufox-remote-host` is included in this repository and wraps Camoufox's Playwright websocket server. It binds to `127.0.0.1` by default; pass `--host 0.0.0.0` to accept remote clients and protect the endpoint with a firewall or tunnel. It keeps one browser process alive for as long as the host runs, which preserves the session across tool calls. Camoufox's server protocol cannot expose a persistent browser context, so local mode is the right choice when the login must survive a host restart. Remote mode needs only Playwright on the MCP host (`pip install -e ".[remote]"`).
+
+Typical persistent-session flow:
+
+```text
+camoufox_open(url="https://example.com/login", session="default")
+camoufox_act(action="type", selector="#email", text="me@example.com", session="default")
+camoufox_act(action="type", selector="#password", text="...", press_enter=True, session="default")
+camoufox_read(session="default")
+```
+
+`camoufox_session(action="status")` shows each session's current URL and title. `camoufox_session(action="close", session="default")` closes the browser but keeps the local profile on disk.
+
+### Page fetching
+
+`page_fetch` downloads one HTTP(S) URL and returns readable text. HTML is converted to plain text with inline Markdown links; scripts, styles, and tags are removed. JSON is pretty-printed, and plain text or XML is returned as-is. PDFs and other binary content are rejected. `max_chars` defaults to 20000 and is capped at 200000; the result reports `char_count`, `truncated`, and `download_truncated`. It does not execute JavaScript, send cookies, or authenticate, so use it for static pages and APIs. Use `camoufox_open` for rendered pages.
+
+Search tools are not registered in the PyFind server, and `run_commands` cannot call them: a focused queue holds the input gate closed for its whole duration, and a slow remote request would lock the human out. Call them as normal tools on the `dynamic_search_kit` server instead.
 
 ## Typical workflow
 
-For web research, use the websearch server: call `web_search` first, then `web_fetch` on the most relevant results. The web tools are independent of the desktop workflow below.
+For web research, use the `dynamic_search_kit` server: call `dynamic_search` first, then `page_fetch` on the most relevant static results. If a page needs JavaScript, cookies, or a login, use `camoufox_open` / `camoufox_act` / `camoufox_read` instead. The search tools are independent of the desktop workflow below.
 
 1. `list_windows` or `list_monitors` to find the target.
 2. `screenshot` or `ocr` to inspect it. If the model has native vision, prefer
@@ -347,8 +492,9 @@ For web research, use the websearch server: call `web_search` first, then `web_f
 - The emergency hotkey (`Ctrl+Alt+Shift+F12` by default) releases the gate from physical input only. `Ctrl+Alt+Del` still opens the secure desktop, so Task Manager can end the MCP process if necessary.
 - Global hooks are not a security boundary. Any process that knows loge2's `dwExtraInfo` tag can forge a passthrough event, and elevated windows may ignore injected input because of UIPI.
 - Screen captures may contain passwords, tokens, or private content. Output stays in the local temp directory and is never uploaded by the PyFind server.
-- `web_search` sends the query to the configured SearXNG instance, and `web_fetch` contacts the URL you pass. Do not put secrets in queries, and only fetch sources you trust.
-- `web_fetch` follows redirects and can reach local or private network addresses. Treat it as a general HTTP client, not a sandbox.
+- `dynamic_search`, `searxng_search`, and `tavily_search` send the query to those services. `page_fetch` and `camoufox_open` contact the URL you pass. Do not put secrets in search queries, and only fetch sources you trust.
+- `page_fetch` follows redirects and can reach local or private network addresses. Treat it as a general HTTP client, not a sandbox.
+- Camoufox profiles contain cookies and login state. Treat `CAMOUFOX_MCP_PROFILE_DIR` as sensitive data, and do not share a remote browser endpoint with untrusted clients.
 - The agent sees the screen; do not run it against sensitive desktops unattended.
 
 ## Limitations
@@ -366,10 +512,15 @@ For web research, use the websearch server: call `web_search` first, then `web_f
 - The input gate is global to the interactive desktop session, not per-window. During an injection it blocks the human's input in every application, including OpenCode; between injections input passes through.
 - The PyFind pool costs a few hundred MB and takes a moment on the first screen call.
 - A stuck PyFind worker can hang a tool call; OpenCode's execution timeout returns an error, but reconnecting the PyFind server is the clean recovery.
-- `web_search` needs SearXNG's JSON API. If `search.formats` does not include `json`, the instance returns HTTP 403 and the tool reports a hint.
-- `web_fetch` reads static HTML, text, JSON, and XML only. It does not run JavaScript, keep cookies, log in, or extract PDFs and other binary files.
+- `searxng_search` needs SearXNG's JSON API. If `search.formats` does not include `json`, the instance returns HTTP 403 and the tool reports a hint.
+- `page_fetch` reads static HTML, text, JSON, and XML only. It does not run JavaScript, keep cookies, log in, or extract PDFs and other binary files.
 - HTML-to-text conversion is heuristic. Navigation, cookie banners, and other boilerplate can remain; use the returned title and description to judge the page.
 - Public SearXNG instances may rate-limit or block non-browser clients. Set `SEARXNG_MCP_USER_AGENT` to a browser-like value only if the instance's rules allow it.
+- Camoufox search extracts links from a search engine page; markup changes or a CAPTCHA can leave `results` empty. The response includes `challenge_detected` and a `page_text_preview` to help diagnose it.
+- `fetch_url` renders one page at a time. Fetching many URLs sequentially with `render="always"` is slow; fetch only the pages you actually need.
+- The `auto` render heuristic is intentionally conservative: it catches JavaScript shells, challenge pages, and very short HTML, but a page can still need rendering without matching those signals. Use `render="always"` when correctness matters more than speed.
+- Local Camoufox profiles are locked while a session is open. Close the session before launching the same profile from another process.
+- `camoufox_remote_host` keeps the browser alive only while its process runs. For profile persistence across restarts, use local mode.
 
 ## Development
 
@@ -379,7 +530,7 @@ pytest -m integration tests/test_live_pyfind.py -s
 pytest -m integration tests/test_live_input_gate.py -s
 ```
 
-`tests/test_live_pyfind.py` initializes the real PyFinder pool and captures the desktop. `tests/test_live_input_gate.py` installs the real keyboard/mouse hooks, briefly blocks physical input, verifies tagged injection passes, and exercises the emergency hotkey with harmless F16 chords. Run it only on an interactive desktop. `tests/test_searxng.py` uses a local HTTP fixture, so it does not need a running SearXNG instance. `tests/test_web_server.py` checks that the websearch server registers only the web tools.
+`tests/test_live_pyfind.py` initializes the real PyFinder pool and captures the desktop. `tests/test_live_input_gate.py` installs the real keyboard/mouse hooks, briefly blocks physical input, verifies tagged injection passes, and exercises the emergency hotkey with harmless F16 chords. Run it only on an interactive desktop. `tests/test_searxng.py` and `tests/test_tavily.py` use local HTTP fixtures, so they do not need a running instance or a real Tavily key. `tests/test_web_server.py` checks that the `dynamic_search_kit` server registers only the configured search tools. `tests/test_camoufox.py` checks URL building, proxy parsing, session naming, and configuration without launching a browser.
 
 To exercise both stdio servers without OpenCode:
 
@@ -393,11 +544,14 @@ python -m pytest -q tests/test_stdio_smoke.py
 - `loge2 is not installed`: install the editable package from `F:\all\GitHub\loge2` in the same interpreter that runs the MCP server.
 - `block_user_input` fails to install a hook: make sure the PyFind server runs in an interactive desktop session, not a service or session-0 process.
 - `opencode mcp list` shows `failed` for `pyfind`: check the absolute Python path, `cwd`, and that `python -m custom_agent_mcp` starts without an immediate traceback.
-- `opencode mcp list` shows `failed` for `websearch`: check that `python -m custom_agent_mcp.web_server` starts; it does not need PyFind or loge2, only `mcp` and `loguru`.
-- `web_search` is missing from the PyFind tools: expected. The web tools are registered by the separate `websearch` server; add that MCP entry.
+- `opencode mcp list` shows `failed` for `dynamic_search_kit`: check that `python -m custom_agent_mcp.dynamic_search_kit` starts; it does not need PyFind or loge2, only `mcp` and `loguru` (plus Playwright/Camoufox for browser tools).
+- `dynamic_search` is missing from the PyFind tools: expected. The search tools are registered by the separate `dynamic_search_kit` server; add that MCP entry.
 - No OCR text: confirm the Windows OCR language pack is installed and try a smaller region.
 - `find_image` misses: use the actual on-screen pixels as the template, raise the region size, or lower `threshold`.
-- `web_search` returns HTTP 403: add `json` to `search.formats` in SearXNG's `settings.yml`, restart it, and check the limiter.
-- `web_search` cannot reach the instance: confirm `SEARXNG_MCP_BASE_URL`, that SearXNG is running, and that the URL does not already end in `/search`.
-- `web_fetch` reports an unsupported content type: only HTML, text, JSON, and XML pages are supported; PDFs and binary downloads are rejected.
+- `searxng_search` returns HTTP 403: add `json` to `search.formats` in SearXNG's `settings.yml`, restart it, and check the limiter.
+- SearXNG cannot be reached: confirm `SEARXNG_MCP_BASE_URL`, that SearXNG is running, and that the URL does not already end in `/search`.
+- Tavily is skipped: set `TAVILY_API_KEY` or add it to `.env`; check `TAVILY_MCP_ENV_FILE` if you use a custom env file.
+- Camoufox is skipped: install `.[browser]` and run `python -m camoufox fetch` for local mode, or set `CAMOUFOX_MCP_MODE=remote` and `CAMOUFOX_MCP_REMOTE_URL`.
+- Camoufox search returns no results: try another `CAMOUFOX_MCP_SEARCH_ENGINE`, set `CAMOUFOX_MCP_HEADLESS=false` to inspect the page, or check `challenge_detected`.
+- `page_fetch` reports an unsupported content type: only HTML, text, JSON, and XML pages are supported; PDFs and binary downloads are rejected.
 - Protocol errors: set `PYFIND_MCP_LOG_LEVEL=DEBUG` and inspect OpenCode's MCP logs; PyFind diagnostics are redirected to stderr so stdout stays clean.

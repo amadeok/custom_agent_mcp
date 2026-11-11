@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "custom-agent-mcp"
-version = "0.1.0"
-description = "MCP servers for local Windows automation and SearXNG web research"
+version = "0.2.0"
+description = "MCP servers for local Windows automation and configurable web search"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -15,6 +15,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+browser = [
+    "camoufox[geoip]>=0.5.9",
+    "playwright>=1.50",
+]
+remote = [
+    "playwright>=1.50",
+]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
@@ -22,6 +29,10 @@ dev = [
 
 [project.scripts]
 custom-agent-mcp = "custom_agent_mcp.__main__:main"
+dynamic-search-kit = "custom_agent_mcp.dynamic_search_kit:main"
+custom-agent-dynamic-search-kit = "custom_agent_mcp.dynamic_search_kit:main"
+camoufox-remote-host = "custom_agent_mcp.camoufox_remote:main"
+# Deprecated alias kept so existing MCP client configurations keep working.
 custom-agent-websearch-mcp = "custom_agent_mcp.web_server:main"
 
 [tool.setuptools.packages.find]

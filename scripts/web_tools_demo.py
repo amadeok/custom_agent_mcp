@@ -1,13 +1,13 @@
-"""Call the web search tools from a plain Python script, without OpenCode.
+"""Call the Dynamic Search Kit tools from a plain Python script, without OpenCode.
 
 There are two ways to reach the same code, and this script shows both:
 
 * direct (default) - import ``custom_agent_mcp.searxng`` and call it. No MCP
   handshake, no server process, no extra dependency beyond ``loguru``.
-* ``--mcp`` - spawn ``python -m custom_agent_mcp.web_server`` over stdio and
-  call the ``web_search`` / ``web_fetch`` tools exactly like OpenCode does. Add
-  ``--url`` to attach to an already running streamable-HTTP server instead of
-  spawning one.
+* ``--mcp`` - spawn ``python -m custom_agent_mcp.dynamic_search_kit`` over stdio
+  and call the ``dynamic_search`` / ``page_fetch`` tools exactly like OpenCode
+  does. Add ``--url`` to attach to an already running streamable-HTTP server
+  instead of spawning one.
 
 The SearXNG instance comes from ``SEARXNG_MCP_BASE_URL`` (default
 ``http://127.0.0.1:8888``), the same variable the MCP server reads.
@@ -37,7 +37,8 @@ from custom_agent_mcp.settings import Settings, load_settings
 # Output helpers
 # --------------------------------------------------------------------------- #
 def print_search(payload: dict[str, Any]) -> None:
-    print(f"instance: {payload['instance']}")
+    print(f"provider: {payload.get('selected_provider') or payload.get('provider')}")
+    print(f"instance: {payload.get('instance')}")
     print(f"query:    {payload['query']}")
     print(f"results:  {payload['result_count']}")
 
@@ -56,6 +57,16 @@ def print_search(payload: dict[str, Any]) -> None:
         print("\nunresponsive engines:")
         for name, reason in payload["unresponsive_engines"]:
             print(f"  - {name}: {reason}")
+
+    attempts = payload.get("attempts") or []
+    if attempts:
+        print("\nattempts:")
+        for attempt in attempts:
+            detail = attempt.get("error") or attempt.get("reason") or ""
+            print(
+                f"  - {attempt['provider']}: {attempt['status']}"
+                + (f" ({detail})" if detail else "")
+            )
 
 
 def print_page(payload: dict[str, Any], preview: int) -> None:
@@ -128,35 +139,38 @@ async def run_mcp(
     fetch_index: int,
     preview: int,
     url: str | None,
+    providers: list[str] | None,
 ) -> int:
     from mcp import Client, StdioServerParameters
 
     if url:
         target: Any = url
     else:
-        # Pass the environment through so the child sees SEARXNG_MCP_BASE_URL.
+        # Pass the environment through so the child sees the search settings.
         target = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "custom_agent_mcp.web_server"],
+            args=["-m", "custom_agent_mcp.dynamic_search_kit"],
             env=dict(os.environ),
         )
 
+    arguments: dict[str, Any] = {"query": query, "max_results": max_results}
+    if providers:
+        arguments["providers"] = providers
+
     async with Client(target) as client:
-        result = await client.call_tool(
-            "web_search", {"query": query, "max_results": max_results}
-        )
+        result = await client.call_tool("dynamic_search", arguments)
         if result.is_error:
-            raise SystemExit(f"web_search failed: {tool_payload(result)}")
+            raise SystemExit(f"dynamic_search failed: {tool_payload(result)}")
         payload = tool_payload(result)
         print_search(payload)
 
         if fetch_index:
             result = await client.call_tool(
-                "web_fetch",
+                "page_fetch",
                 {"url": pick_url(payload, fetch_index), "max_chars": max(preview, 1)},
             )
             if result.is_error:
-                raise SystemExit(f"web_fetch failed: {tool_payload(result)}")
+                raise SystemExit(f"page_fetch failed: {tool_payload(result)}")
             print_page(tool_payload(result), preview)
     return 0
 
@@ -167,7 +181,7 @@ async def run_mcp(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="web_tools_demo",
-        description="Search and fetch through the web search MCP server.",
+        description="Search and fetch through the Dynamic Search Kit MCP server.",
     )
     parser.add_argument("query", help="search query")
     parser.add_argument(
@@ -195,6 +209,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--url",
         help="with --mcp, attach to a running streamable-HTTP server",
     )
+    parser.add_argument(
+        "--providers",
+        help="with --mcp, comma-separated provider order, for example searxng,tavily",
+    )
     return parser
 
 
@@ -203,6 +221,11 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings()
 
     if args.mcp:
+        providers = (
+            [part.strip() for part in args.providers.split(",") if part.strip()]
+            if args.providers
+            else None
+        )
         return asyncio.run(
             run_mcp(
                 settings,
@@ -211,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.fetch,
                 args.preview,
                 args.url,
+                providers,
             )
         )
     return run_direct(

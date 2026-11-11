@@ -18,8 +18,8 @@ from custom_agent_mcp.searxng import (
     normalize_page_url,
     start_instance,
 )
+from custom_agent_mcp.dynamic_search_kit import create_dynamic_search_server
 from custom_agent_mcp.settings import Settings
-from custom_agent_mcp.web_server import create_web_server
 
 SEARCH_PAYLOAD = {
     "query": "searx test",
@@ -357,7 +357,7 @@ def test_fetch_page_rejects_invalid_max_chars(web_server, max_chars):
 
 
 def test_web_tools_work_through_the_mcp_client(web_server, tmp_path):
-    server = create_web_server(
+    server = create_dynamic_search_server(
         Settings(
             templates_dir=tmp_path / "templates",
             output_dir=tmp_path / "out",
@@ -369,11 +369,11 @@ def test_web_tools_work_through_the_mcp_client(web_server, tmp_path):
     async def call() -> tuple[object, object]:
         async with Client(server) as client:
             search = await client.call_tool(
-                "web_search",
-                {"query": "searx test", "max_results": 1},
+                "dynamic_search",
+                {"query": "searx test", "max_results": 1, "providers": ["searxng"]},
             )
             fetch = await client.call_tool(
-                "web_fetch",
+                "page_fetch",
                 {"url": f"{web_server}/page", "max_chars": 500},
             )
             return search, fetch

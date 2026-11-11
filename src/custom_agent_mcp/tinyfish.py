@@ -1,9 +1,9 @@
-"""TinyFish Search API fallback for SearXNG.
+"""TinyFish Search API client.
 
 TinyFish Search is free up to 12,000 requests per day (30 requests/minute) and
-returns ranked web results as JSON. The MCP uses it only when SearXNG is
-unreachable, returns an error, or returns no results, so SearXNG stays the
-primary and the bot-prone free engines are not the last word.
+returns ranked web results as JSON. Dynamic Search Kit treats it as a normal
+provider: include ``tinyfish`` in DYNAMIC_SEARCH_PROVIDERS and position it
+anywhere in the chain.
 
 Docs: https://docs.tinyfish.ai/search-api/reference
 """

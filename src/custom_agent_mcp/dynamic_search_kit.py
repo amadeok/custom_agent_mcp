@@ -61,7 +61,7 @@ sessions stay alive across tool calls: camoufox_open navigates, camoufox_read
 returns the current page, camoufox_act clicks, types, presses keys, evaluates
 JavaScript, or waits, and camoufox_session lists or closes sessions. Local
 sessions keep their profile on disk; remote sessions connect to a Playwright
-websocket endpoint.
+websocket endpoint; camofox mode attaches to an existing camofox-browser daemon.
 
 start_searxng is registered only when SEARXNG_MCP_START_CMD points at a
 launcher. Never put secrets or private data in a search query.

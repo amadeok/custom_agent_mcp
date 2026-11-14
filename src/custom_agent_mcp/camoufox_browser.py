@@ -60,12 +60,12 @@ _ENGINE_URLS = {
     "bing": "https://www.bing.com/search?q={query}",
     "google": "https://www.google.com/search?q={query}",
 }
-_ENGINE_SELECTORS = {
+ENGINE_SELECTORS = {
     "duckduckgo": "div.result, article[data-testid='result']",
     "bing": "li.b_algo",
     "google": "div.MjjYud, div.g",
 }
-_ENGINE_SCRIPTS = {
+ENGINE_SCRIPTS = {
     "duckduckgo": r"""
 () => {
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
@@ -127,7 +127,7 @@ _ENGINE_SCRIPTS = {
 }
 """,
 }
-_GENERIC_SCRIPT = r"""
+GENERIC_SCRIPT = r"""
 () => {
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
   const out = [];
@@ -529,7 +529,7 @@ class _SessionWorker:
         settle_ms: int | None = None,
         max_chars: int = 20_000,
     ) -> dict[str, Any]:
-        target = _validate_page_url(url)
+        target = validate_page_url(url)
         if wait_until not in WAIT_UNTIL:
             raise ValueError(
                 "wait_until must be one of: " + ", ".join(sorted(WAIT_UNTIL))
@@ -592,7 +592,7 @@ class _SessionWorker:
         elif action == "evaluate":
             if not (expression or "").strip():
                 raise ValueError("evaluate requires an expression")
-            result = _jsonable(page.evaluate(expression))
+            result = jsonable_result(page.evaluate(expression))
         elif action == "wait":
             if selector:
                 page.locator(selector).first.wait_for(state="visible", timeout=timeout)
@@ -636,7 +636,7 @@ class _SessionWorker:
         )
         page = self._page_ref()
         page.goto(target, wait_until="domcontentloaded")
-        selector = _ENGINE_SELECTORS.get(settings.camoufox_search_engine.strip().lower())
+        selector = ENGINE_SELECTORS.get(settings.camoufox_search_engine.strip().lower())
         if selector and not settings.camoufox_search_url:
             try:
                 page.wait_for_selector(selector, timeout=min(5000, int(settings.camoufox_timeout * 1000)))
@@ -646,13 +646,13 @@ class _SessionWorker:
         if delay:
             page.wait_for_timeout(delay)
 
-        script = _ENGINE_SCRIPTS.get(settings.camoufox_search_engine.strip().lower())
+        script = ENGINE_SCRIPTS.get(settings.camoufox_search_engine.strip().lower())
         if script is None or settings.camoufox_search_url:
-            script = _GENERIC_SCRIPT
+            script = GENERIC_SCRIPT
         raw = page.evaluate(script)
         if not isinstance(raw, list):
             raw = []
-        results = _normalize_search_items(raw, settings.camoufox_search_engine, max_results)
+        results = normalize_search_items(raw, settings.camoufox_search_engine, max_results)
         title = None
         try:
             title = page.title()
@@ -666,7 +666,7 @@ class _SessionWorker:
                 )
             except Exception:
                 body_for_challenge = ""
-        challenge = _looks_challenged(title, body_for_challenge)
+        challenge = looks_challenged(title, body_for_challenge)
         snapshot = None
         try:
             snapshot = self._snapshot(max_chars=1000)
@@ -880,7 +880,7 @@ class CamoufoxBrowserManager:
             worker.close()
 
 
-def _validate_page_url(raw: str) -> str:
+def validate_page_url(raw: str) -> str:
     value = (raw or "").strip()
     if not value:
         raise ValueError("url must not be empty")
@@ -902,7 +902,7 @@ def _validate_max_chars(max_chars: int) -> int:
     return max_chars
 
 
-def _jsonable(value: Any) -> Any:
+def jsonable_result(value: Any) -> Any:
     try:
         encoded = json.dumps(value, ensure_ascii=False)
     except (TypeError, ValueError):
@@ -919,7 +919,7 @@ def _jsonable(value: Any) -> Any:
         return str(value)
 
 
-def _normalize_search_items(
+def normalize_search_items(
     raw: list[Any], engine: str, max_results: int
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
@@ -954,6 +954,6 @@ def _normalize_search_items(
     return results
 
 
-def _looks_challenged(title: str | None, body: str | None) -> bool:
+def looks_challenged(title: str | None, body: str | None) -> bool:
     text = f"{title or ''} {body or ''}".lower()
     return any(marker in text for marker in _CHALLENGE_MARKERS)

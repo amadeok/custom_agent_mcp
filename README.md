@@ -2,7 +2,7 @@
 
 A pair of local [Model Context Protocol](https://modelcontextprotocol.io/) servers: one for Windows automation and one for configurable web search. The PyFind server exposes screen capture, Windows OCR, and template matching from the local screen-automation package in `F:\all\GitHub\autopy2`. Optional input tools use loge2 (`F:\all\GitHub\loge2`) to block physical keyboard/mouse input with global hooks while injecting tagged keyboard and mouse events through the block. The `dynamic_search_kit` server adds SearXNG, Tavily, TinyFish, and persistent Camoufox browser sessions, plus readable page fetching and an optional `start_searxng`.
 
-The PyFind server keeps one `PyFinder` instance alive for its whole lifetime. The first screen tool call pays the PyFind process-pool startup cost; later calls reuse the warm pool and template cache. The `dynamic_search_kit` server is independent: it does not import PyFind or loge2 and can run when only web research is needed. Camoufox is optional; SearXNG and Tavily work without it.
+The PyFind server keeps one `PyFinder` instance alive for its whole lifetime. The first screen tool call pays the PyFind process-pool startup cost; later calls reuse the warm pool and template cache. The `dynamic_search_kit` server is independent: it does not import PyFind or loge2 and can run when only web research is needed. Camoufox is optional; SearXNG and Tavily work without it, and `CAMOUFOX_MCP_MODE=camofox` attaches to an existing `camofox-browser` daemon without installing the Python browser extra.
 
 ## Requirements
 
@@ -12,6 +12,7 @@ The PyFind server keeps one `PyFinder` instance alive for its whole lifetime. Th
 - loge2 installed in the same interpreter for input and blocking, normally editable from `F:\all\GitHub\loge2` (PyFind server only)
 - The MCP Python SDK v2 (`mcp>=2.3,<3`)
 - A reachable SearXNG instance with JSON output enabled, a Tavily key, a TinyFish key, or the optional Camoufox browser extra
+- For `CAMOUFOX_MCP_MODE=camofox`, a running `camofox-browser` daemon is enough; no Python browser packages are needed
 - `page_fetch` only needs network access; the base web tools add no Python dependency
 
 Verify PyFind and loge2 before installing:
@@ -70,6 +71,13 @@ Remote Camoufox mode only needs Playwright on the MCP host; the browser can run 
 
 ```powershell
 python -m pip install -e ".[remote]"
+```
+
+The `camofox` mode needs neither extra. It talks HTTP to an already-running `camofox-browser` daemon:
+
+```powershell
+$env:CAMOUFOX_MCP_MODE = "camofox"
+$env:CAMOUFOX_MCP_SERVER_URL = "http://127.0.0.1:9377"
 ```
 
 ## OpenCode configuration
@@ -140,11 +148,18 @@ OpenCode V2 stores MCP servers under `mcp.servers`. Register the two servers sep
           "TAVILY_API_KEY": "tvly-...",
           "TAVILY_MCP_SEARCH_DEPTH": "basic",
           // local launches Camoufox on this PC; remote connects to a
-          // Playwright websocket server.
+          // Playwright websocket server; camofox attaches to a running
+          // camofox-browser daemon (the backend of the Node "camofox"
+          // MCP server).
           "CAMOUFOX_MCP_MODE": "local",
           "CAMOUFOX_MCP_HEADLESS": "true",
           "CAMOUFOX_MCP_PROFILE_DIR": "C:\\Users\\amade\\AppData\\Local\\dynamic-search-kit\\camoufox",
           "CAMOUFOX_MCP_SEARCH_ENGINE": "duckduckgo"
+          // For CAMOUFOX_MCP_MODE=camofox, use these instead:
+          // "CAMOUFOX_MCP_MODE": "camofox",
+          // "CAMOUFOX_MCP_SERVER_URL": "http://127.0.0.1:9377",
+          // "CAMOUFOX_MCP_SERVER_USER": "default",
+          // "CAMOUFOX_MCP_SERVER_SESSION_PREFIX": "dsk"
           // "CAMOUFOX_MCP_MODE": "remote",
           // "CAMOUFOX_MCP_REMOTE_URL": "ws://127.0.0.1:9222/dynamic-search"
         },
@@ -171,6 +186,10 @@ opencode mcp list
 ```
 
 Or use `/mcps` inside OpenCode.
+
+## DeepSeek Harness configuration
+
+DSH composes each profile from global bundle and patch layers, with no automatic per-repository discovery. Repository-scoped MCP servers are passed in as a `--patch` overlay from that repository. See [docs/dsh-per-repo-mcp.md](docs/dsh-per-repo-mcp.md) for the layer order, a repo-local patch and launcher, patch semantics, and the difference between DSH's built-in `web_search` and this repository's `dynamic_search_kit`.
 
 ## Environment variables
 
@@ -213,16 +232,20 @@ Or use `/mcps` inside OpenCode.
 | `TAVILY_MCP_SEARCH_DEPTH` | `basic` | `basic`, `advanced`, `fast`, or `ultra-fast` |
 | `TAVILY_MCP_INCLUDE_ANSWER` | `false` | Ask Tavily for an LLM-generated answer |
 | `TAVILY_MCP_INCLUDE_RAW_CONTENT` | `false` | Ask Tavily for cleaned page content in each result |
-| `CAMOUFOX_MCP_MODE` | `local` | `local` launches Camoufox on this PC; `remote` connects to a Playwright websocket server |
+| `CAMOUFOX_MCP_MODE` | `local` | `local` launches Camoufox on this PC; `remote` connects to a Playwright websocket server; `camofox` attaches to a running `camofox-browser` daemon |
 | `CAMOUFOX_MCP_REMOTE_URL` | *(empty)* | Remote endpoint such as `ws://127.0.0.1:9222/dynamic-search`; required in remote mode |
-| `CAMOUFOX_MCP_HEADLESS` | `true` | Run the local browser headless; set `false` to watch or log in manually |
-| `CAMOUFOX_MCP_HUMANIZE` | `true` | Humanize cursor movement |
-| `CAMOUFOX_MCP_PROFILE_DIR` | `%LOCALAPPDATA%\dynamic-search-kit\camoufox` | Root directory for persistent local profiles; each session gets a subdirectory |
-| `CAMOUFOX_MCP_LOCALE` | `en-US` | Browser locale |
-| `CAMOUFOX_MCP_OS` | `windows` | Fingerprint target OS: `windows`, `macos`, `linux`, or `auto` |
-| `CAMOUFOX_MCP_PROXY` | *(empty)* | Proxy URL or JSON object, for example `http://user:pass@host:8080` |
-| `CAMOUFOX_MCP_GEOIP` | `false` | `true` matches locale/geolocation to the proxy exit IP; an IP string targets that IP |
-| `CAMOUFOX_MCP_TIMEOUT` | `45` | Browser launch, navigation, and action timeout in seconds |
+| `CAMOUFOX_MCP_SERVER_URL` | `http://127.0.0.1:9377` | camofox daemon base URL; falls back to `CAMOFOX_URL` |
+| `CAMOUFOX_MCP_SERVER_API_KEY` | *(empty)* | Bearer token for a daemon protected by `CAMOFOX_API_KEY`; falls back to `CAMOFOX_API_KEY` |
+| `CAMOUFOX_MCP_SERVER_USER` | `default` | Daemon user id; falls back to `CAMOFOX_DEFAULT_USER_ID`. The default matches the Node `camofox` MCP server, so cookies and logins are shared |
+| `CAMOUFOX_MCP_SERVER_SESSION_PREFIX` | `dsk` | Each MCP session maps to tab group `<prefix>-<session>`; set empty to use raw session names |
+| `CAMOUFOX_MCP_HEADLESS` | `true` | Run the local browser headless; set `false` to watch or log in manually. Ignored in `camofox` mode |
+| `CAMOUFOX_MCP_HUMANIZE` | `true` | Humanize cursor movement. Ignored in `camofox` mode |
+| `CAMOUFOX_MCP_PROFILE_DIR` | `%LOCALAPPDATA%\dynamic-search-kit\camoufox` | Root directory for persistent local profiles; each session gets a subdirectory. Ignored in `camofox` mode, which uses the daemon's profiles |
+| `CAMOUFOX_MCP_LOCALE` | `en-US` | Browser locale. Ignored in `camofox` mode |
+| `CAMOUFOX_MCP_OS` | `windows` | Fingerprint target OS: `windows`, `macos`, `linux`, or `auto`. Ignored in `camofox` mode |
+| `CAMOUFOX_MCP_PROXY` | *(empty)* | Proxy URL or JSON object, for example `http://user:pass@host:8080`. Ignored in `camofox` mode |
+| `CAMOUFOX_MCP_GEOIP` | `false` | `true` matches locale/geolocation to the proxy exit IP; an IP string targets that IP. Ignored in `camofox` mode |
+| `CAMOUFOX_MCP_TIMEOUT` | `45` | Browser launch, navigation, and action timeout in seconds; also bounds each camofox HTTP request |
 | `CAMOUFOX_MCP_SETTLE_MS` | `750` | Extra wait after navigation or an action, in milliseconds |
 | `CAMOUFOX_MCP_SEARCH_ENGINE` | `duckduckgo` | `duckduckgo`, `bing`, `google`, or `custom` |
 | `CAMOUFOX_MCP_SEARCH_URL` | *(empty)* | Custom search URL template containing `{query}`; overrides the engine URL |
@@ -452,6 +475,25 @@ $env:CAMOUFOX_MCP_REMOTE_URL = "ws://browser-host:9222/dynamic-search"
 
 `camoufox-remote-host` is included in this repository and wraps Camoufox's Playwright websocket server. It binds to `127.0.0.1` by default; pass `--host 0.0.0.0` to accept remote clients and protect the endpoint with a firewall or tunnel. It keeps one browser process alive for as long as the host runs, which preserves the session across tool calls. Camoufox's server protocol cannot expose a persistent browser context, so local mode is the right choice when the login must survive a host restart. Remote mode needs only Playwright on the MCP host (`pip install -e ".[remote]"`).
 
+camofox daemon mode:
+
+The Node `camofox` MCP server is a thin stdio front end. The browser itself lives in the `camofox-browser` HTTP daemon on port 9377. Point this repository at the same daemon instead of starting a second browser:
+
+```powershell
+# Start the daemon once, using the wrapper shipped with the DSH setup:
+.mcp\camofox-browser\start-camofox-browser.cmd start
+
+# Then configure the Dynamic Search Kit:
+$env:CAMOUFOX_MCP_MODE = "camofox"
+$env:CAMOUFOX_MCP_SERVER_URL = "http://127.0.0.1:9377"
+```
+
+This mode needs no Python browser extra: it is a plain HTTP client. `CAMOUFOX_MCP_SERVER_URL` falls back to `CAMOFOX_URL`, so an environment already configured for the Node server works unchanged. `CAMOUFOX_MCP_SERVER_USER` defaults to `default`, the same daemon user id the Node MCP server uses, so the two servers share one anti-detect profile, cookies, and logins. `CAMOUFOX_MCP_SERVER_API_KEY` sends a bearer token when the daemon was started with `CAMOFOX_API_KEY` (it falls back to `CAMOFOX_API_KEY`).
+
+Each named MCP session maps to a tab group named `<prefix>-<session>` under that user (`dsk-default`, `dsk-search`, `dsk-fetch` by default; change the prefix with `CAMOUFOX_MCP_SERVER_SESSION_PREFIX`). Existing tabs in a group are adopted after an MCP server restart, so the current page survives. `camoufox_session(action="close")` deletes only that group; it never closes the daemon's whole user session, so tabs owned by the Node `camofox` MCP server are left alone. `close_all` only touches groups with the configured prefix.
+
+Browser fingerprint and profile settings belong to the daemon in this mode: `CAMOUFOX_MCP_HEADLESS`, `HUMANIZE`, `PROFILE_DIR`, `LOCALE`, `OS`, `PROXY`, and `GEOIP` are ignored. The daemon's `/health` endpoint confirms it is running; `browserConnected: false` is normal while idle because the browser starts on the first tab.
+
 Typical persistent-session flow:
 
 ```text
@@ -461,7 +503,7 @@ camoufox_act(action="type", selector="#password", text="...", press_enter=True, 
 camoufox_read(session="default")
 ```
 
-`camoufox_session(action="status")` shows each session's current URL and title. `camoufox_session(action="close", session="default")` closes the browser but keeps the local profile on disk.
+`camoufox_session(action="status")` shows each session's current URL and title. `camoufox_session(action="close", session="default")` closes the browser but keeps the local profile on disk. In camofox mode, `status` also lists matching groups discovered from the daemon, and `close` removes the tab group while the daemon's profile stays intact.
 
 ### Page fetching
 
@@ -494,7 +536,7 @@ For web research, use the `dynamic_search_kit` server: call `dynamic_search` fir
 - Screen captures may contain passwords, tokens, or private content. Output stays in the local temp directory and is never uploaded by the PyFind server.
 - `dynamic_search`, `searxng_search`, and `tavily_search` send the query to those services. `page_fetch` and `camoufox_open` contact the URL you pass. Do not put secrets in search queries, and only fetch sources you trust.
 - `page_fetch` follows redirects and can reach local or private network addresses. Treat it as a general HTTP client, not a sandbox.
-- Camoufox profiles contain cookies and login state. Treat `CAMOUFOX_MCP_PROFILE_DIR` as sensitive data, and do not share a remote browser endpoint with untrusted clients.
+- Camoufox profiles contain cookies and login state. Treat `CAMOUFOX_MCP_PROFILE_DIR` as sensitive data, and do not share a remote browser endpoint with untrusted clients. In camofox mode the daemon's profile is shared with every client that uses the same user id, including the Node `camofox` MCP server; the agent sees those logins too.
 - The agent sees the screen; do not run it against sensitive desktops unattended.
 
 ## Limitations
@@ -521,6 +563,9 @@ For web research, use the `dynamic_search_kit` server: call `dynamic_search` fir
 - The `auto` render heuristic is intentionally conservative: it catches JavaScript shells, challenge pages, and very short HTML, but a page can still need rendering without matching those signals. Use `render="always"` when correctness matters more than speed.
 - Local Camoufox profiles are locked while a session is open. Close the session before launching the same profile from another process.
 - `camoufox_remote_host` keeps the browser alive only while its process runs. For profile persistence across restarts, use local mode.
+- `CAMOUFOX_MCP_MODE=camofox` requires the `camofox-browser` daemon to be running before the first browser call. The error names the configured URL and suggests starting the daemon.
+- In camofox mode, `wait_until="load"` and `"networkidle"` use the daemon's page-ready wait, which is best-effort: the daemon always navigates with `domcontentloaded`. The daemon's own handler timeout (30 seconds by default) still caps individual operations.
+- camofox mode shares the daemon's `default` user profile with other clients unless `CAMOUFOX_MCP_SERVER_USER` is changed. Its tab groups use the `dsk-` prefix so closing a session does not touch tabs created by the Node `camofox` MCP server.
 
 ## Development
 

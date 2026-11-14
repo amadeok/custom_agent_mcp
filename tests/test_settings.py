@@ -38,6 +38,13 @@ def test_load_settings_defaults(monkeypatch):
         "TAVILY_MCP_INCLUDE_RAW_CONTENT",
         "CAMOUFOX_MCP_MODE",
         "CAMOUFOX_MCP_REMOTE_URL",
+        "CAMOUFOX_MCP_SERVER_URL",
+        "CAMOUFOX_MCP_SERVER_API_KEY",
+        "CAMOUFOX_MCP_SERVER_USER",
+        "CAMOUFOX_MCP_SERVER_SESSION_PREFIX",
+        "CAMOFOX_URL",
+        "CAMOFOX_API_KEY",
+        "CAMOFOX_DEFAULT_USER_ID",
         "CAMOUFOX_MCP_HEADLESS",
         "CAMOUFOX_MCP_HUMANIZE",
         "CAMOUFOX_MCP_PROFILE_DIR",
@@ -96,6 +103,10 @@ def test_load_settings_defaults(monkeypatch):
     assert settings.tavily_include_raw_content is False
     assert settings.camoufox_mode == "local"
     assert settings.camoufox_remote_url == ""
+    assert settings.camoufox_server_url == "http://127.0.0.1:9377"
+    assert settings.camoufox_server_api_key == ""
+    assert settings.camoufox_server_user == "default"
+    assert settings.camoufox_server_session_prefix == "dsk"
     assert settings.camoufox_headless is True
     assert settings.camoufox_humanize is True
     assert settings.camoufox_profile_dir.name == "camoufox"
@@ -143,8 +154,12 @@ def test_load_settings_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("TAVILY_MCP_SEARCH_DEPTH", "advanced")
     monkeypatch.setenv("TAVILY_MCP_INCLUDE_ANSWER", "true")
     monkeypatch.setenv("TAVILY_MCP_INCLUDE_RAW_CONTENT", "true")
-    monkeypatch.setenv("CAMOUFOX_MCP_MODE", "remote")
+    monkeypatch.setenv("CAMOUFOX_MCP_MODE", "camofox")
     monkeypatch.setenv("CAMOUFOX_MCP_REMOTE_URL", "ws://browser.local:9222/dsk")
+    monkeypatch.setenv("CAMOUFOX_MCP_SERVER_URL", "http://camofox.local:9377")
+    monkeypatch.setenv("CAMOUFOX_MCP_SERVER_API_KEY", "secret")
+    monkeypatch.setenv("CAMOUFOX_MCP_SERVER_USER", "agent")
+    monkeypatch.setenv("CAMOUFOX_MCP_SERVER_SESSION_PREFIX", "dsk2")
     monkeypatch.setenv("CAMOUFOX_MCP_HEADLESS", "false")
     monkeypatch.setenv("CAMOUFOX_MCP_HUMANIZE", "false")
     monkeypatch.setenv("CAMOUFOX_MCP_PROFILE_DIR", str(tmp_path / "profiles"))
@@ -192,8 +207,12 @@ def test_load_settings_overrides(monkeypatch, tmp_path):
     assert settings.tavily_search_depth == "advanced"
     assert settings.tavily_include_answer is True
     assert settings.tavily_include_raw_content is True
-    assert settings.camoufox_mode == "remote"
+    assert settings.camoufox_mode == "camofox"
     assert settings.camoufox_remote_url == "ws://browser.local:9222/dsk"
+    assert settings.camoufox_server_url == "http://camofox.local:9377"
+    assert settings.camoufox_server_api_key == "secret"
+    assert settings.camoufox_server_user == "agent"
+    assert settings.camoufox_server_session_prefix == "dsk2"
     assert settings.camoufox_headless is False
     assert settings.camoufox_humanize is False
     assert settings.camoufox_profile_dir == tmp_path / "profiles"

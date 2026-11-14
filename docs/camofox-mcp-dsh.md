@@ -2,7 +2,7 @@
 
 Field notes from wiring the `camofox` MCP server (Node) into [DSH](https://github.com/deepseek-ai) on this Windows machine, including the multi-hour crash that turned out to be caused by a directory path.
 
-This is the **Node** stack (`camofox-mcp` + `camofox-browser`). It is unrelated to this repository's own Python `camoufox_open` / `camoufox_act` integration described in the [README](../README.md#camoufox-persistent-sessions). Both can coexist; they are separate browsers with separate profiles.
+This is the **Node** stack (`camofox-mcp` + `camofox-browser`). With `CAMOUFOX_MCP_MODE=camofox`, this repository's Python `camoufox_*` tools can drive the same daemon and share its default user profile; the [README](../README.md#camoufox-persistent-sessions) describes that mode. With `local` or `remote` mode it uses its own separate Camoufox browser and profile, so the two stacks can also coexist independently.
 
 ---
 

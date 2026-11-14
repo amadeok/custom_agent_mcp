@@ -302,8 +302,10 @@ def register_web_tools(
 
             The session keeps cookies, local storage, and the current page
             across tool calls. Local sessions use a profile on disk; remote
-            sessions connect to CAMOUFOX_MCP_REMOTE_URL. Use camoufox_act to
-            click or type, then camoufox_read to inspect the result.
+            sessions connect to CAMOUFOX_MCP_REMOTE_URL; camofox sessions
+            attach to a tab group in a running camofox-browser daemon. Use
+            camoufox_act to click or type, then camoufox_read to inspect the
+            result.
             """
             return service.browser.open(
                 url,
@@ -376,6 +378,8 @@ def register_web_tools(
             action="close" closes one session (session is required).
             action="close_all" closes every session. Closing a local session
             keeps its profile on disk, so cookies survive the next launch.
+            In camofox mode, close removes the tab group from the daemon while
+            the daemon's shared profile stays intact.
             """
             if action == "status":
                 return service.browser.status(session)

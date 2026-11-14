@@ -12,6 +12,13 @@ from .camoufox_browser import (
     DEFAULT_SETTLE_MS,
     DEFAULT_TIMEOUT as DEFAULT_CAMOUFOX_TIMEOUT,
 )
+from .camofox_server import (
+    DEFAULT_CAMOFOX_URL,
+    DEFAULT_CAMOFOX_USER,
+    DEFAULT_SESSION_PREFIX,
+    normalize_server_url,
+    validate_session_prefix,
+)
 from .searxng import (
     DEFAULT_SEARXNG_URL,
     DEFAULT_START_TIMEOUT,
@@ -32,7 +39,7 @@ DEFAULT_SEARCH_PROVIDERS = ("searxng", "tavily", "tinyfish", "camoufox")
 TOOL_MODES = ("combined", "separate", "both")
 SEARCH_STRATEGIES = ("first", "merge")
 FETCH_RENDER_MODES = ("auto", "always", "never")
-CAMOUFOX_MODES = ("local", "remote")
+CAMOUFOX_MODES = ("local", "remote", "camofox")
 CAMOUFOX_SYSTEMS = ("windows", "macos", "linux")
 
 
@@ -147,6 +154,39 @@ def _default_camoufox_os() -> str:
     return raw
 
 
+def _default_camoufox_server_url() -> str:
+    raw = (
+        os.getenv("CAMOUFOX_MCP_SERVER_URL")
+        or os.getenv("CAMOFOX_URL")
+        or ""
+    ).strip()
+    return raw or DEFAULT_CAMOFOX_URL
+
+
+def _default_camoufox_server_api_key() -> str:
+    return (
+        os.getenv("CAMOUFOX_MCP_SERVER_API_KEY")
+        or os.getenv("CAMOFOX_API_KEY")
+        or ""
+    ).strip()
+
+
+def _default_camoufox_server_user() -> str:
+    raw = (
+        os.getenv("CAMOUFOX_MCP_SERVER_USER")
+        or os.getenv("CAMOFOX_DEFAULT_USER_ID")
+        or ""
+    ).strip()
+    return raw or DEFAULT_CAMOFOX_USER
+
+
+def _default_camoufox_session_prefix() -> str:
+    raw = os.getenv("CAMOUFOX_MCP_SERVER_SESSION_PREFIX")
+    if raw is None:
+        return DEFAULT_SESSION_PREFIX
+    return raw.strip()
+
+
 def _default_camoufox_engine() -> str:
     raw = (os.getenv("CAMOUFOX_MCP_SEARCH_ENGINE") or DEFAULT_SEARCH_ENGINE).strip().lower()
     if raw not in {*("duckduckgo", "bing", "google"), "custom"}:
@@ -198,6 +238,10 @@ class Settings:
     tavily_include_raw_content: bool = False
     camoufox_mode: str = "local"
     camoufox_remote_url: str = ""
+    camoufox_server_url: str = DEFAULT_CAMOFOX_URL
+    camoufox_server_api_key: str = ""
+    camoufox_server_user: str = DEFAULT_CAMOFOX_USER
+    camoufox_server_session_prefix: str = DEFAULT_SESSION_PREFIX
     camoufox_headless: bool = True
     camoufox_humanize: bool = True
     camoufox_profile_dir: Path = field(default_factory=_default_camoufox_profile_dir)
@@ -237,6 +281,20 @@ class Settings:
                 raise ValueError(f"unknown search provider {provider!r}")
         if self.camoufox_mode not in CAMOUFOX_MODES:
             raise ValueError(f"camoufox_mode must be one of {list(CAMOUFOX_MODES)}")
+        object.__setattr__(
+            self,
+            "camoufox_server_url",
+            normalize_server_url(self.camoufox_server_url),
+        )
+        server_user = (self.camoufox_server_user or "").strip()
+        if not server_user:
+            raise ValueError("camoufox_server_user must not be empty")
+        object.__setattr__(self, "camoufox_server_user", server_user)
+        object.__setattr__(
+            self,
+            "camoufox_server_session_prefix",
+            validate_session_prefix(self.camoufox_server_session_prefix),
+        )
         if self.camoufox_mode == "remote" and self.camoufox_remote_url:
             scheme = self.camoufox_remote_url.split(":", 1)[0].lower()
             if scheme not in {"ws", "wss"}:
@@ -333,6 +391,10 @@ def load_settings() -> Settings:
         camoufox_remote_url=(
             os.getenv("CAMOUFOX_MCP_REMOTE_URL", "").strip()
         ),
+        camoufox_server_url=_default_camoufox_server_url(),
+        camoufox_server_api_key=_default_camoufox_server_api_key(),
+        camoufox_server_user=_default_camoufox_server_user(),
+        camoufox_server_session_prefix=_default_camoufox_session_prefix(),
         camoufox_headless=_env_bool("CAMOUFOX_MCP_HEADLESS", True),
         camoufox_humanize=_env_bool("CAMOUFOX_MCP_HUMANIZE", True),
         camoufox_profile_dir=_default_camoufox_profile_dir(),

@@ -18,6 +18,7 @@ from .camoufox_browser import (
     MAX_SEARCH_RESULTS as CAMOUFOX_MAX_RESULTS,
     CamoufoxBrowserManager,
 )
+from .camofox_server import CamofoxServerManager
 from .exceptions import (
     CamoufoxError,
     DynamicSearchError,
@@ -160,10 +161,10 @@ class DynamicSearchService:
         self,
         settings: Settings,
         *,
-        browser: CamoufoxBrowserManager | None = None,
+        browser: CamoufoxBrowserManager | CamofoxServerManager | None = None,
     ) -> None:
         self.settings = settings
-        self.browser = browser or CamoufoxBrowserManager(settings)
+        self.browser = browser or _build_browser_backend(settings)
 
     # -- provider availability --------------------------------------------
     def provider_availability(self, provider: str) -> tuple[bool, str | None]:
@@ -797,6 +798,15 @@ class DynamicSearchService:
         shutdown = getattr(self.browser, "shutdown", None)
         if callable(shutdown):
             shutdown()
+
+
+def _build_browser_backend(
+    settings: Settings,
+) -> CamoufoxBrowserManager | CamofoxServerManager:
+    """Pick the browser backend for the configured Camoufox mode."""
+    if settings.camoufox_mode == "camofox":
+        return CamofoxServerManager(settings)
+    return CamoufoxBrowserManager(settings)
 
 
 def _needs_render(

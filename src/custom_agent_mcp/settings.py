@@ -15,6 +15,7 @@ from .camoufox_browser import (
 from .camofox_server import (
     DEFAULT_CAMOFOX_URL,
     DEFAULT_CAMOFOX_USER,
+    DEFAULT_QUEUE_TIMEOUT,
     DEFAULT_SESSION_PREFIX,
     normalize_server_url,
     validate_session_prefix,
@@ -250,6 +251,7 @@ class Settings:
     camoufox_proxy: str = ""
     camoufox_geoip: bool | str = False
     camoufox_timeout: float = DEFAULT_CAMOUFOX_TIMEOUT
+    camoufox_queue_timeout: float = DEFAULT_QUEUE_TIMEOUT
     camoufox_settle_ms: int = DEFAULT_SETTLE_MS
     camoufox_search_engine: str = DEFAULT_SEARCH_ENGINE
     camoufox_search_url: str = ""
@@ -281,6 +283,11 @@ class Settings:
                 raise ValueError(f"unknown search provider {provider!r}")
         if self.camoufox_mode not in CAMOUFOX_MODES:
             raise ValueError(f"camoufox_mode must be one of {list(CAMOUFOX_MODES)}")
+        if not 0 <= self.camoufox_queue_timeout <= 3600:
+            raise ValueError(
+                "camoufox_queue_timeout must be between 0 and 3600 seconds "
+                "(0 waits forever)"
+            )
         object.__setattr__(
             self,
             "camoufox_server_url",
@@ -406,6 +413,9 @@ def load_settings() -> Settings:
         camoufox_geoip=_default_camoufox_geoip(),
         camoufox_timeout=_env_float(
             "CAMOUFOX_MCP_TIMEOUT", DEFAULT_CAMOUFOX_TIMEOUT, 5.0, 300.0
+        ),
+        camoufox_queue_timeout=_env_float(
+            "CAMOUFOX_MCP_QUEUE_TIMEOUT", DEFAULT_QUEUE_TIMEOUT, 0.0, 3600.0
         ),
         camoufox_settle_ms=_env_int(
             "CAMOUFOX_MCP_SETTLE_MS", DEFAULT_SETTLE_MS, 0, 10_000

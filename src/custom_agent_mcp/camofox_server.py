@@ -24,8 +24,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import deque
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, TYPE_CHECKING
+from typing import Any, Callable, Iterator, Sequence, TYPE_CHECKING
 
 from .camoufox_browser import (
     DEFAULT_SEARCH_ENGINE,
@@ -54,6 +56,9 @@ DEFAULT_CAMOFOX_USER = "default"
 DEFAULT_SESSION_PREFIX = "dsk"
 DEFAULT_USER_AGENT = "custom-agent-mcp/0.2 (camofox-browser client)"
 MAX_TIMEOUT = 300.0
+# How long one caller waits its turn on a session shared through a single
+# server process. 0 disables the timeout.
+DEFAULT_QUEUE_TIMEOUT = 300.0
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 ERROR_DETAIL_CHARS = 2000
 _PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
@@ -795,6 +800,75 @@ class _ServerSession:
         return result
 
 
+class _FifoGate:
+    """Strictly FIFO gate that serializes work on one browser session.
+
+    ``threading.Lock`` wakes waiters in an unspecified order, so one busy
+    directory can starve the others sharing a session. This gate hands the turn
+    to the oldest waiter instead: overlapping calls from several MCP clients run
+    one at a time, in arrival order, and ``hold`` fails with a clear error when
+    the queue does not drain before the configured timeout.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self._condition = threading.Condition()
+        self._waiters: deque[object] = deque()
+        self._served = 0
+        self._busy_seconds = 0.0
+
+    def stats(self) -> dict[str, Any]:
+        with self._condition:
+            return {
+                "session": self.name,
+                "queued": max(len(self._waiters) - 1, 0),
+                "served": self._served,
+                "busy_seconds": round(self._busy_seconds, 3),
+            }
+
+    @contextmanager
+    def hold(self, *, timeout: float | None = None) -> Iterator[None]:
+        token = object()
+        started = time.monotonic()
+        with self._condition:
+            self._waiters.append(token)
+            acquired = False
+            try:
+                while self._waiters[0] is not token:
+                    if timeout is None:
+                        self._condition.wait()
+                        continue
+                    remaining = timeout - (time.monotonic() - started)
+                    if remaining <= 0:
+                        raise CamoufoxError(
+                            f"browser session {self.name!r} stayed busy for more "
+                            f"than {timeout:g}s with {len(self._waiters)} "
+                            "caller(s) queued; retry, or raise "
+                            "CAMOUFOX_MCP_QUEUE_TIMEOUT"
+                        )
+                    self._condition.wait(min(remaining, 1.0))
+                acquired = True
+            finally:
+                if not acquired:
+                    try:
+                        self._waiters.remove(token)
+                    except ValueError:
+                        pass
+                    # A timed-out head may have exposed a new head.
+                    self._condition.notify_all()
+        try:
+            yield
+        finally:
+            with self._condition:
+                try:
+                    self._waiters.popleft()
+                except IndexError:
+                    pass
+                self._served += 1
+                self._busy_seconds += time.monotonic() - started
+                self._condition.notify_all()
+
+
 class CamofoxServerManager:
     """Session manager that proxies to a running camofox-browser daemon."""
 
@@ -814,6 +888,8 @@ class CamofoxServerManager:
         )
         self._sessions: dict[str, _ServerSession] = {}
         self._lock = threading.Lock()
+        self._gates: dict[str, _FifoGate] = {}
+        self._gates_lock = threading.Lock()
         self._closed = False
         self._health_checked = False
         atexit.register(self.shutdown)
@@ -849,6 +925,41 @@ class CamofoxServerManager:
         self._health_checked = True
 
     # -- session access ----------------------------------------------------
+    def _queue_timeout(self) -> float | None:
+        value = float(
+            getattr(self.settings, "camoufox_queue_timeout", DEFAULT_QUEUE_TIMEOUT)
+        )
+        return value if value > 0 else None
+
+    def _gate(self, session: str) -> _FifoGate:
+        name = validate_session_name(session)
+        with self._gates_lock:
+            gate = self._gates.get(name)
+            if gate is None:
+                gate = _FifoGate(name)
+                self._gates[name] = gate
+            return gate
+
+    @contextmanager
+    def _exclusive(self, session: str) -> Iterator[None]:
+        """Wait in line for one session so shared clients cannot interleave."""
+        with self._gate(session).hold(timeout=self._queue_timeout()):
+            yield
+
+    @contextmanager
+    def _exclusive_many(self, sessions: Sequence[str]) -> Iterator[None]:
+        """Hold several session turns at once, always in sorted order."""
+        gates = [self._gate(name) for name in sorted(set(sessions))]
+        with ExitStack() as stack:
+            for gate in gates:
+                stack.enter_context(gate.hold(timeout=self._queue_timeout()))
+            yield
+
+    def queues(self) -> list[dict[str, Any]]:
+        with self._gates_lock:
+            gates = list(self._gates.values())
+        return [gate.stats() for gate in gates]
+
     def _session(self, session: str) -> _ServerSession:
         name = validate_session_name(session)
         with self._lock:
@@ -880,13 +991,14 @@ class CamofoxServerManager:
                 f"max_results must be between 1 and {MAX_SEARCH_RESULTS}"
             )
         worker = self._session(session)
-        return worker.search(
-            query,
-            max_results=max_results,
-            language=language,
-            time_range=time_range,
-            safesearch=safesearch,
-        )
+        with self._exclusive(session):
+            return worker.search(
+                query,
+                max_results=max_results,
+                language=language,
+                time_range=time_range,
+                safesearch=safesearch,
+            )
 
     def open(
         self,
@@ -899,19 +1011,21 @@ class CamofoxServerManager:
     ) -> dict[str, Any]:
         _validate_max_chars(max_chars)
         worker = self._session(session)
-        return worker.open(
-            url,
-            wait_until=wait_until,
-            settle_ms=settle_ms,
-            max_chars=max_chars,
-        )
+        with self._exclusive(session):
+            return worker.open(
+                url,
+                wait_until=wait_until,
+                settle_ms=settle_ms,
+                max_chars=max_chars,
+            )
 
     def read(
         self, *, session: str = "default", max_chars: int = 20_000
     ) -> dict[str, Any]:
         _validate_max_chars(max_chars)
         worker = self._session(session)
-        return worker.read(max_chars=max_chars)
+        with self._exclusive(session):
+            return worker.read(max_chars=max_chars)
 
     def act(
         self,
@@ -929,17 +1043,18 @@ class CamofoxServerManager:
     ) -> dict[str, Any]:
         _validate_max_chars(max_chars)
         worker = self._session(session)
-        return worker.act(
-            action,
-            selector=selector,
-            text=text,
-            key=key,
-            expression=expression,
-            timeout_ms=timeout_ms,
-            press_enter=press_enter,
-            settle_ms=settle_ms,
-            max_chars=max_chars,
-        )
+        with self._exclusive(session):
+            return worker.act(
+                action,
+                selector=selector,
+                text=text,
+                key=key,
+                expression=expression,
+                timeout_ms=timeout_ms,
+                press_enter=press_enter,
+                settle_ms=settle_ms,
+                max_chars=max_chars,
+            )
 
     def status(self, session: str | None = None) -> dict[str, Any]:
         with self._lock:
@@ -1020,38 +1135,44 @@ class CamofoxServerManager:
             else {"ok": False, "error": daemon_error},
             "profile_dir": None,
             "session_count": len(infos),
+            "session_queues": self.queues(),
             "sessions": infos,
         }
 
     def close(self, session: str) -> dict[str, Any]:
         name = validate_session_name(session)
-        with self._lock:
-            worker = self._sessions.pop(name, None)
-        if worker is None:
-            # Clean up a tab group left behind by a previous server run.
-            try:
-                self.client.close_group(
-                    build_session_key(self.session_prefix, name), self.user_id
-                )
-            except CamoufoxError:
-                pass
-            return {"ok": True, "session": name, "closed": False}
-        worker.close()
-        return {"ok": True, "session": name, "closed": True}
+        with self._exclusive(name):
+            with self._lock:
+                worker = self._sessions.pop(name, None)
+            if worker is None:
+                # Clean up a tab group left behind by a previous server run.
+                try:
+                    self.client.close_group(
+                        build_session_key(self.session_prefix, name), self.user_id
+                    )
+                except CamoufoxError:
+                    pass
+                return {"ok": True, "session": name, "closed": False}
+            worker.close()
+            return {"ok": True, "session": name, "closed": True}
 
     def close_all(self) -> dict[str, Any]:
         with self._lock:
-            workers = list(self._sessions.values())
-            self._sessions.clear()
-        names: list[str] = []
-        for worker in workers:
-            worker.close()
-            names.append(worker.name)
+            names = list(self._sessions)
+        with self._exclusive_many(names):
+            with self._lock:
+                workers = list(self._sessions.values())
+                self._sessions.clear()
+            closed: list[str] = []
+            for worker in workers:
+                worker.close()
+                closed.append(worker.name)
 
         # Also clean up groups from an earlier server run, without touching
         # other daemon users or the Node camofox MCP server's own tab groups.
         keys = {
-            build_session_key(self.session_prefix, name) for name in names
+            build_session_key(self.session_prefix, name)
+            for name in set(names) | set(closed)
         }
         if self.session_prefix:
             try:
@@ -1067,7 +1188,7 @@ class CamofoxServerManager:
                 self.client.close_group(key, self.user_id)
             except CamoufoxError:
                 pass
-        return {"ok": True, "closed": len(names), "sessions": names}
+        return {"ok": True, "closed": len(closed), "sessions": closed}
 
     def shutdown(self) -> None:
         if self._closed:

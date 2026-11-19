@@ -352,6 +352,7 @@ class _SessionWorker:
                 "title": self._info.title,
                 "created_at": self._info.created_at,
                 "last_used": self._info.last_used,
+                "queued": self._jobs.qsize(),
                 "profile_dir": str(self.profile_dir),
             }
         return info

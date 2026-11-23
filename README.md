@@ -58,7 +58,7 @@ python -m custom_agent_mcp.dynamic_search_kit
 dynamic-search-kit
 ```
 
-The old `python -m custom_agent_mcp.web_server` and `custom-agent-websearch-mcp` names remain as compatibility aliases. Both servers speak MCP over stdio and do not print a banner.
+The old `python -m custom_agent_mcp.web_server` and `custom-agent-websearch-mcp` names remain as compatibility aliases. Both servers speak MCP over stdio by default and do not print a banner; pass `--transport streamable-http --host 0.0.0.0` to share one over the network (see [Shared HTTP server over the local network](#shared-http-server-over-the-local-network)).
 
 For local Camoufox sessions, install the optional browser extra and fetch the browser once:
 
@@ -368,6 +368,60 @@ Mask templates, directories of templates, and multi-scale matching are not suppo
 ## Dynamic Search Kit
 
 `dynamic_search_kit` lives in its own MCP entry. Start it with `python -m custom_agent_mcp.dynamic_search_kit` (or `dynamic-search-kit`). It does not import PyFind or loge2; it only needs the shared settings module and network access. The old `python -m custom_agent_mcp.web_server` and `custom-agent-websearch-mcp` names still work as compatibility aliases.
+
+### Shared HTTP server over the local network
+
+The default entry point is stdio. To share one server between several clients, run it over Streamable HTTP:
+
+```powershell
+python -m custom_agent_mcp.dynamic_search_kit --transport streamable-http --host 0.0.0.0 --port 8765
+```
+
+The endpoint is `http://<this-machine>:8765/mcp`. With `--host 0.0.0.0` the server accepts connections from other machines on the network, and `127.0.0.1` still works locally. The default, `--host 127.0.0.1`, keeps it local-only. `--transport sse` is also available at `/sse` for older clients.
+
+The repository's shared launcher reads the bind address and port from `scripts/websearch.env` (`WEBSEARCH_MCP_HOST` and `WEBSEARCH_MCP_PORT`; the shipped default is `0.0.0.0:8765`). `--status` prints both the localhost and LAN URLs, and `--restart` applies configuration changes:
+
+```powershell
+python scripts/ensure_websearch_server.py --status
+python scripts/ensure_websearch_server.py --restart
+```
+
+Point a client on another machine at the LAN URL:
+
+```jsonc
+"mcp": {
+  "servers": {
+    "websearch": {
+      "type": "remote",
+      "url": "http://192.168.1.156:8765/mcp"
+    }
+  }
+}
+```
+
+Use the host's LAN address on the remote machine; `127.0.0.1` would mean the remote machine itself. Allow inbound TCP 8765 in Windows Firewall on the Private profile:
+
+```powershell
+New-NetFirewallRule -DisplayName "Dynamic Search Kit MCP" -Direction Inbound `
+  -Protocol TCP -LocalPort 8765 -Action Allow -Profile Private
+```
+
+#### Requiring a token
+
+A server without authentication lets anyone who can reach the port run searches and use the Camoufox sessions, including their saved logins. Set a static bearer token to require `Authorization: Bearer <token>` on every HTTP request:
+
+```dotenv
+# scripts/websearch.env
+WEBSEARCH_MCP_AUTH_TOKEN=replace-with-a-long-random-value
+```
+
+or pass `--auth-token` (also read from `MCP_HTTP_AUTH_TOKEN`). Clients then add a header:
+
+```jsonc
+"headers": { "Authorization": "Bearer replace-with-a-long-random-value" }
+```
+
+The token applies to every connection, including local ones, so update the existing `127.0.0.1` entry before restarting. It is a shared secret, not OAuth, and it does not encrypt traffic: use it on a trusted LAN or through a VPN/TLS tunnel.
 
 The provider chain is deliberately configurable:
 

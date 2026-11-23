@@ -58,6 +58,10 @@ DEFAULT_STARTUP_TIMEOUT = 120.0
 DEFAULT_LOCK_TIMEOUT = 120.0
 MCP_PATH = "/mcp"
 
+# Binding to a wildcard address accepts LAN clients, but the wildcard itself is
+# not a valid destination for probes on Windows.
+_WILDCARD_HOSTS = {"0.0.0.0", "::", "[::]", ""}
+
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _DETACHED_PROCESS = 0x00000008
 _CREATE_NO_WINDOW = 0x08000000
@@ -85,15 +89,63 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def connect_host(bind_host: str) -> str:
+    """Return an address that can connect to a server bound to ``bind_host``."""
+    if bind_host == "::":
+        return "::1"
+    if bind_host in _WILDCARD_HOSTS:
+        return "127.0.0.1"
+    return bind_host
+
+
+def lan_ipv4_addresses() -> list[str]:
+    """Best-effort list of non-loopback IPv4 addresses for this machine."""
+    addresses: set[str] = set()
+    try:
+        for info in socket.getaddrinfo(
+            socket.gethostname(), None, socket.AF_INET, socket.SOCK_STREAM
+        ):
+            addresses.add(info[4][0])
+    except OSError:
+        pass
+
+    # The UDP connect does not send packets; it only asks the routing table
+    # which local address would be used for outbound traffic.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("8.8.8.8", 80))
+            addresses.add(probe.getsockname()[0])
+    except OSError:
+        pass
+
+    return sorted(
+        address
+        for address in addresses
+        if not address.startswith("127.")
+        and not address.startswith("169.254.")
+        and address != "0.0.0.0"
+    )
+
+
+def advertised_urls(bind_host: str, port: int) -> list[str]:
+    """Client URLs for a server bound to ``bind_host``."""
+    local = f"http://{connect_host(bind_host)}:{port}{MCP_PATH}"
+    if bind_host not in _WILDCARD_HOSTS:
+        return [local]
+    return [local, *(f"http://{ip}:{port}{MCP_PATH}" for ip in lan_ipv4_addresses())]
+
+
 def port_open(host: str, port: int, timeout: float = 0.25) -> bool:
     try:
-        with socket.create_connection((host, port), timeout=timeout):
+        with socket.create_connection((connect_host(host), port), timeout=timeout):
             return True
     except OSError:
         return False
 
 
-def probe_mcp(host: str, port: int, timeout: float = 2.0) -> tuple[bool, str]:
+def probe_mcp(
+    host: str, port: int, timeout: float = 2.0, token: str | None = None
+) -> tuple[bool, str]:
     """Return (ready, detail) for the Streamable HTTP MCP endpoint.
 
     Any HTTP answer below 500 proves the listener is our server rather than a
@@ -115,13 +167,17 @@ def probe_mcp(host: str, port: int, timeout: float = 2.0) -> tuple[bool, str]:
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }
-    connection = http.client.HTTPConnection(host, port, timeout=timeout)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    connection = http.client.HTTPConnection(connect_host(host), port, timeout=timeout)
     try:
         connection.request("POST", MCP_PATH, body=body, headers=headers)
         response = connection.getresponse()
         detail = f"HTTP {response.status}"
         response.read(2048)
-        return response.status < 500, detail
+        # A 401/403 means something is listening but our token/config does not
+        # match, so it is not usable as this shared server.
+        return response.status < 400, detail
     except (OSError, http.client.HTTPException) as exc:
         return False, f"{type(exc).__name__}: {exc}"
     finally:
@@ -196,14 +252,20 @@ def resolve_python() -> str:
 # --------------------------------------------------------------------------- #
 # actions
 # --------------------------------------------------------------------------- #
-def status(host: str, port: int, pid_file: Path) -> dict[str, Any]:
-    ready, detail = probe_mcp(host, port)
+def status(
+    host: str, port: int, pid_file: Path, *, token: str | None = None
+) -> dict[str, Any]:
+    ready, detail = probe_mcp(host, port, token=token)
     pid = read_pid(pid_file)
+    urls = advertised_urls(host, port)
     return {
-        "url": f"http://{host}:{port}{MCP_PATH}",
+        "url": urls[0],
+        "urls": urls,
+        "bind_host": host,
         "listening": port_open(host, port),
         "ready": ready,
         "probe": detail,
+        "auth_required": bool(token),
         "pid": pid,
         "pid_alive": bool(pid and pid_alive(pid)),
         "pid_file": str(pid_file),
@@ -219,12 +281,23 @@ def start_server(
     log_file: Path,
     startup_timeout: float,
     cwd: Path,
+    token: str | None = None,
 ) -> dict[str, Any]:
     """Start the server if it is not already healthy. Caller holds the lock."""
-    ready, detail = probe_mcp(host, port)
+    ready, detail = probe_mcp(host, port, token=token)
     if ready:
         pid = read_pid(pid_file)
-        return {"action": "none", "reason": "already running", "pid": pid, "probe": detail}
+        urls = advertised_urls(host, port)
+        return {
+            "action": "none",
+            "reason": "already running",
+            "pid": pid,
+            "url": urls[0],
+            "urls": urls,
+            "bind_host": host,
+            "auth_required": bool(token),
+            "probe": detail,
+        }
 
     if port_open(host, port):
         raise SystemExit(
@@ -288,12 +361,16 @@ def start_server(
                 f"shared server exited during startup with code {code}; "
                 f"see {log_file}"
             )
-        ready, last_detail = probe_mcp(host, port)
+        ready, last_detail = probe_mcp(host, port, token=token)
         if ready:
+            urls = advertised_urls(host, port)
             return {
                 "action": "started",
                 "pid": process.pid,
-                "url": f"http://{host}:{port}{MCP_PATH}",
+                "url": urls[0],
+                "urls": urls,
+                "bind_host": host,
+                "auth_required": bool(token),
                 "log": str(log_file),
                 "probe": last_detail,
             }
@@ -397,9 +474,22 @@ def main(argv: list[str] | None = None) -> int:
     action.add_argument("--stop", action="store_true", help="stop the shared server")
     action.add_argument("--restart", action="store_true", help="stop, then start")
     action.add_argument("--status", action="store_true", help="print state as JSON")
-    parser.add_argument("--host", default=os.getenv("WEBSEARCH_MCP_HOST", DEFAULT_HOST))
     parser.add_argument(
-        "--port", type=int, default=int(os.getenv("WEBSEARCH_MCP_PORT", DEFAULT_PORT))
+        "--host",
+        default=None,
+        help=(
+            "Bind address (default: WEBSEARCH_MCP_HOST from --env-file, then the "
+            f"environment, then {DEFAULT_HOST}). Use 0.0.0.0 to accept LAN clients."
+        ),
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=(
+            "Port (default: WEBSEARCH_MCP_PORT from --env-file, then the "
+            f"environment, then {DEFAULT_PORT})."
+        ),
     )
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
@@ -422,8 +512,28 @@ def main(argv: list[str] | None = None) -> int:
     log_file = args.log_file or args.state_dir / "server.log"
     lock_file = args.lock_file or args.state_dir / "server.lock"
 
+    file_env = read_env_file(args.env_file)
+    host = (
+        args.host
+        or file_env.get("WEBSEARCH_MCP_HOST")
+        or os.getenv("WEBSEARCH_MCP_HOST")
+        or DEFAULT_HOST
+    )
+    raw_port = (
+        args.port
+        if args.port is not None
+        else file_env.get("WEBSEARCH_MCP_PORT") or os.getenv("WEBSEARCH_MCP_PORT")
+    )
+    port = int(raw_port) if raw_port else DEFAULT_PORT
+    token = (
+        file_env.get("WEBSEARCH_MCP_AUTH_TOKEN")
+        or os.getenv("WEBSEARCH_MCP_AUTH_TOKEN")
+        or os.getenv("MCP_HTTP_AUTH_TOKEN")
+        or None
+    )
+
     if args.status:
-        print(json.dumps(status(args.host, args.port, pid_file), indent=2))
+        print(json.dumps(status(host, port, pid_file, token=token), indent=2))
         return 0
 
     lock_file.parent.mkdir(parents=True, exist_ok=True)
@@ -439,19 +549,20 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.stop or args.restart:
-            result = stop_server(args.host, args.port, pid_file)
+            result = stop_server(host, port, pid_file)
             if not args.quiet:
                 print(json.dumps(result))
             if args.stop:
                 return 0
         result = start_server(
-            host=args.host,
-            port=args.port,
+            host=host,
+            port=port,
             env_file=args.env_file,
             pid_file=pid_file,
             log_file=log_file,
             startup_timeout=args.startup_timeout,
             cwd=args.cwd,
+            token=token,
         )
         if not args.quiet:
             print(json.dumps(result, indent=2))
